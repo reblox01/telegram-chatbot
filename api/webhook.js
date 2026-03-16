@@ -80,8 +80,18 @@ bot.on('text', async (ctx) => {
 
 // Vercel serverless handler
 module.exports = async (req, res) => {
+  // Debug endpoint (GET)
   if (req.method === 'GET') {
-    res.status(200).json({ status: 'ok', uptime: formatUptime(startTime) });
+    const key = process.env.OPENROUTER_API_KEY || 'NOT_SET';
+    res.status(200).json({ 
+      status: 'ok', 
+      uptime: formatUptime(startTime),
+      model: MODEL,
+      keySet: key !== 'NOT_SET',
+      keyPrefix: key.substring(0, 20),
+      vercel: !!process.env.VERCEL,
+      nodeEnv: process.env.NODE_ENV
+    });
     return;
   }
   
