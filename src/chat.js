@@ -50,7 +50,9 @@ async function chat(userId, message, memory) {
 
     return truncate(reply, 4000);
   } catch (err) {
-    console.error('[Chat] OpenRouter error:', err?.response?.data || err.message);
+    const errorMsg = err?.response?.data || err.message;
+    console.error('[Chat] OpenRouter error:', JSON.stringify(errorMsg));
+    console.error('[Chat] Model:', MODEL, 'Key prefix:', OPENROUTER_API_KEY?.substring(0, 15));
     
     if (err?.response?.status === 429) {
       return '⏳ Rate limited by AI provider. Please try again in a moment.';
