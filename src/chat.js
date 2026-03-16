@@ -5,7 +5,7 @@ const { sanitizeText, validateInput, truncate } = require('./utils');
 dotenv.config();
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const MODEL = 'deepseek/deepseek-r1:free';
+const MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
 const MAX_CONTEXT = 20;
 const SYSTEM_PROMPT = `You are a friendly, helpful AI assistant in a Telegram chat. Be concise, clear, and warm. Use emojis naturally but don't overdo it. Keep responses under 2000 characters when possible. Be direct and helpful.`;
 
