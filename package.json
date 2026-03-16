@@ -1,0 +1,20 @@
+{
+  "name": "telegram-chatbot",
+  "version": "1.0.0",
+  "description": "AI-powered Telegram chatbot with OpenRouter",
+  "main": "src/bot.js",
+  "scripts": {
+    "dev": "node src/bot.js",
+    "start": "node src/bot.js",
+    "webhook": "node api/webhook.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "cheerio": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
