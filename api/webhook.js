@@ -48,19 +48,19 @@ bot.catch((err, ctx) => {
 
 // Commands
 bot.start((ctx) => ctx.reply(
-  '👋 *Welcome to AI Chatbot!*\n\nSend me any message to chat!\n\n📋 /help — Commands\n🔧 /weather /search /remind /translate /summarize\n💬 /clear /model /status',
+  '👋 *Hey! I\'m Sewelni!*\n\nI was created by xanx 🧑‍💻 to be your helpful AI assistant.\n\n💬 Just send me any message to chat!\n\n📋 *Commands:*\n/help — All commands\n/weather [city] — Weather\n/search [query] — Web search\n/remind [time] [msg] — Reminder\n/translate [lang] [text] — Translate\n/summarize [url] — Summarize webpage\n/clear — Clear chat history\n/model — AI model info\n/status — Bot status\n\nLet\'s go! 🚀',
   { parse_mode: 'Markdown' }
 ));
 
 bot.command('help', (ctx) => ctx.reply(
-  '🤖 *Commands*\n\n💬 Send any message to chat!\n/weather [city]\n/search [query]\n/remind [time] [msg]\n/translate [lang] [text]\n/summarize [url]\n/clear\n/model\n/status',
+  '🤖 *Sewelni — Commands*\n\n💬 Send any message to chat with me!\n\n🌤 /weather [city]\n🔍 /search [query]\n⏰ /remind [time] [msg]\n🌍 /translate [lang] [text]\n📝 /summarize [url]\n🧹 /clear\n🧠 /model\n📊 /status\n\nCreated by xanx 🧑‍💻',
   { parse_mode: 'Markdown' }
 ));
 
-bot.command('clear', (ctx) => { memory.clear(ctx.from.id); ctx.reply('🧹 History cleared!'); });
-bot.command('model', (ctx) => ctx.reply(`🧠 Model: \`${MODEL}\``, { parse_mode: 'Markdown' }));
+bot.command('clear', (ctx) => { memory.clear(ctx.from.id); ctx.reply('🧹 History cleared! Ready for a fresh start!'); });
+bot.command('model', (ctx) => ctx.reply(`🧠 *Sewelni's Brain*\n\nModel: \`${MODEL}\`\nCreator: xanx 🧑‍💻`, { parse_mode: 'Markdown' }));
 bot.command('status', (ctx) => ctx.reply(
-  `📊 *Status*\n🟢 Online\n⏱ ${formatUptime(startTime)}\n💬 Messages: ${memory.getMessageCount(ctx.from.id)}`,
+  `📊 *Sewelni Status*\n\n🟢 Online\n⏱ Uptime: ${formatUptime(startTime)}\n💬 Messages: ${memory.getMessageCount(ctx.from.id)}\n🧠 Model: \`${MODEL}\`\n\nMade with ❤️ by xanx`,
   { parse_mode: 'Markdown' }
 ));
 
