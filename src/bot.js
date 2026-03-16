@@ -1,4 +1,7 @@
-require('dotenv').config();
+// Only load dotenv in development (not on Vercel)
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  require('dotenv').config();
+}
 const { Telegraf } = require('telegraf');
 const Memory = require('./memory');
 const { chat, MODEL } = require('./chat');

@@ -1,8 +1,9 @@
 const axios = require('axios');
-const dotenv = require('dotenv');
 const { sanitizeText, validateInput, truncate } = require('./utils');
-
-dotenv.config();
+// Only load dotenv in development (not on Vercel)
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+  require('dotenv').config();
+}
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
