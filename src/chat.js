@@ -60,7 +60,7 @@ async function chat(userId, message, memory) {
     if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
       return '⏱️ AI response timed out. Please try again.';
     }
-    return '❌ AI service is temporarily unavailable. Please try again later.';
+    return '❌ AI service is temporarily unavailable. Please try again later. Error: ' + JSON.stringify(errorMsg).substring(0, 200);
   }
 }
 
