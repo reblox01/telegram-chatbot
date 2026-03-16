@@ -74,8 +74,13 @@ bot.on('text', async (ctx) => {
   const msg = ctx.message.text;
   if (!validateInput(msg, 4000)) return ctx.reply('⚠️ Message too long.');
   await ctx.replyWithChatAction('typing');
-  const reply = await chat(ctx.from.id, msg, memory);
-  await ctx.reply(reply);
+  try {
+    const reply = await chat(ctx.from.id, msg, memory);
+    await ctx.reply(reply);
+  } catch(e) {
+    console.error('[Bot] Chat error:', e.message);
+    await ctx.reply('❌ Error: ' + e.message.substring(0, 200));
+  }
 });
 
 // Vercel serverless handler
@@ -96,20 +101,8 @@ module.exports = async (req, res) => {
   }
   
   try {
-    // For debugging: capture bot replies
-    const originalReply = bot.telegram.sendMessage.bind(bot.telegram);
-    let debugReply = null;
-    bot.telegram.sendMessage = async (chatId, text, extra) => {
-      debugReply = text;
-      return originalReply(chatId, text, extra);
-    };
-    
     await bot.handleUpdate(req.body);
-    
-    // Restore original
-    bot.telegram.sendMessage = originalReply;
-    
-    res.status(200).json({ ok: true, debugReply: debugReply?.substring(0, 300) });
+    res.status(200).json({ ok: true });
   } catch (err) {
     console.error('[Webhook] Handle error:', err.message);
     res.status(200).json({ ok: false, error: err.message });
