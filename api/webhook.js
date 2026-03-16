@@ -96,8 +96,20 @@ module.exports = async (req, res) => {
   }
   
   try {
+    // For debugging: capture bot replies
+    const originalReply = bot.telegram.sendMessage.bind(bot.telegram);
+    let debugReply = null;
+    bot.telegram.sendMessage = async (chatId, text, extra) => {
+      debugReply = text;
+      return originalReply(chatId, text, extra);
+    };
+    
     await bot.handleUpdate(req.body);
-    res.status(200).json({ ok: true });
+    
+    // Restore original
+    bot.telegram.sendMessage = originalReply;
+    
+    res.status(200).json({ ok: true, debugReply: debugReply?.substring(0, 300) });
   } catch (err) {
     console.error('[Webhook] Handle error:', err.message);
     res.status(200).json({ ok: false, error: err.message });
