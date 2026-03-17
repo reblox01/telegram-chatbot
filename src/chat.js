@@ -59,7 +59,7 @@ async function chat(userId, message, memory) {
       {
         model: MODEL,
         messages: messages,
-        max_tokens: 1024,
+        max_tokens: 512,
         temperature: 0.7,
       },
       {
@@ -68,7 +68,7 @@ async function chat(userId, message, memory) {
           'Content-Type': 'application/json',
           'HTTP-Referer': 'https://github.com/telegram-chatbot',
         },
-        timeout: 30000,
+        timeout: 15000,
       }
     );
 
