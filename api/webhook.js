@@ -20,6 +20,9 @@ const rateLimits = new Map();
 const RATE_LIMIT = 20;
 const RATE_WINDOW = 3600000;
 
+// Pending commands (waiting for user input)
+const pendingCommands = new Map();
+
 function checkRateLimit(userId) {
   const now = Date.now();
   const key = String(userId);
@@ -64,15 +67,73 @@ bot.command('status', (ctx) => ctx.reply(
   { parse_mode: 'Markdown' }
 ));
 
-bot.command('weather', weather);
-bot.command('search', search);
-bot.command('remind', remind);
-bot.command('translate', translate);
-bot.command('summarize', summarize);
+// Commands with parameter prompting
+bot.command('weather', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
+  if (!args) {
+    pendingCommands.set(ctx.from.id, { command: 'weather', ts: Date.now() });
+    return ctx.reply('🌤 Which city? Type the city name:');
+  }
+  return weather(ctx);
+});
+
+bot.command('search', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
+  if (!args) {
+    pendingCommands.set(ctx.from.id, { command: 'search', ts: Date.now() });
+    return ctx.reply('🔍 What do you want to search for?');
+  }
+  return search(ctx);
+});
+
+bot.command('remind', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
+  if (!args) {
+    pendingCommands.set(ctx.from.id, { command: 'remind', ts: Date.now() });
+    return ctx.reply('⏰ Set a reminder. Format: `5m call mom` or `2h check laundry`', { parse_mode: 'Markdown' });
+  }
+  return remind(ctx);
+});
+
+bot.command('translate', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
+  if (!args) {
+    pendingCommands.set(ctx.from.id, { command: 'translate', ts: Date.now() });
+    return ctx.reply('🌍 What to translate? Format: `fr hello` (language text)', { parse_mode: 'Markdown' });
+  }
+  return translate(ctx);
+});
+
+bot.command('summarize', (ctx) => {
+  const args = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
+  if (!args) {
+    pendingCommands.set(ctx.from.id, { command: 'summarize', ts: Date.now() });
+    return ctx.reply('📝 Send me a URL to summarize:');
+  }
+  return summarize(ctx);
+});
 
 bot.on('text', async (ctx) => {
   const msg = ctx.message.text;
   if (!validateInput(msg, 4000)) return ctx.reply('⚠️ Message too long.');
+  
+  // Check for pending command
+  const pending = pendingCommands.get(ctx.from.id);
+  if (pending && Date.now() - pending.ts < 60000) { // 60s timeout
+    pendingCommands.delete(ctx.from.id);
+    
+    // Create fake context with the command + user input
+    const fakeCtx = { ...ctx, message: { ...ctx.message, text: `/${pending.command} ${msg}` } };
+    
+    switch(pending.command) {
+      case 'weather': return weather(fakeCtx);
+      case 'search': return search(fakeCtx);
+      case 'remind': return remind(fakeCtx);
+      case 'translate': return translate(fakeCtx);
+      case 'summarize': return summarize(fakeCtx);
+    }
+  }
+  
   await ctx.replyWithChatAction('typing');
   try {
     const reply = await chat(ctx.from.id, msg, memory);

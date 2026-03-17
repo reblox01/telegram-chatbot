@@ -70,6 +70,25 @@ class Memory {
     const key = String(userId);
     return this.store[key]?.messages?.length || 0;
   }
+
+  setPendingCommand(userId, command) {
+    const key = this.ensureUser(userId);
+    this.store[key].pendingCommand = command;
+    this.save();
+  }
+
+  getPendingCommand(userId) {
+    const key = String(userId);
+    return this.store[key]?.pendingCommand || null;
+  }
+
+  clearPendingCommand(userId) {
+    const key = String(userId);
+    if (this.store[key]) {
+      delete this.store[key].pendingCommand;
+      this.save();
+    }
+  }
 }
 
 module.exports = Memory;
