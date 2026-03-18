@@ -78,7 +78,7 @@ async function chat(userId, message, memory) {
     return '⚠️ Message too long or invalid. Please keep messages under 4000 characters.';
   }
 
-  const history = memory.getMessages(userId, MAX_CONTEXT);
+  const history = await memory.getMessages(userId, MAX_CONTEXT);
   
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -92,8 +92,8 @@ async function chat(userId, message, memory) {
       const reply = await callModel(model, messages);
       if (reply && reply.trim().length > 0) {
         // Store conversation
-        memory.addMessage(userId, 'user', message);
-        memory.addMessage(userId, 'assistant', reply);
+        await memory.addMessage(userId, 'user', message);
+        await memory.addMessage(userId, 'assistant', reply);
         return truncate(reply, 4000);
       }
       console.warn(`[Chat] Model ${model.id} returned empty, trying fallback...`);

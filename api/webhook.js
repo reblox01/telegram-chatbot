@@ -83,8 +83,8 @@ bot.command('help', (ctx) => ctx.reply(
   { parse_mode: 'Markdown' }
 ));
 
-bot.command('clear', (ctx) => {
-  memory.clear(ctx.from.id);
+bot.command('clear', async (ctx) => {
+  await memory.clear(ctx.from.id);
   ctx.reply('🧹 History cleared! Ready for a fresh start!');
 });
 
@@ -93,14 +93,17 @@ bot.command('model', (ctx) => ctx.reply(
   { parse_mode: 'Markdown' }
 ));
 
-bot.command('status', (ctx) => ctx.reply(
-  `📊 *${BOT_NAME} Status*\n\n` +
-  `🟢 Online\n` +
-  `⏱ Uptime: ${formatUptime(startTime)}\n` +
-  `💬 Messages: ${memory.getMessageCount(ctx.from.id)}\n` +
-  `🧠 Model: \`${MODEL}\``,
-  { parse_mode: 'Markdown' }
-));
+bot.command('status', async (ctx) => {
+  const msgCount = await memory.getMessageCount(ctx.from.id);
+  ctx.reply(
+    `📊 *${BOT_NAME} Status*\n\n` +
+    `🟢 Online\n` +
+    `⏱ Uptime: ${formatUptime(startTime)}\n` +
+    `💬 Messages: ${msgCount}\n` +
+    `🧠 Model: \`${MODEL}\``,
+    { parse_mode: 'Markdown' }
+  );
+});
 
 // ── Commands with param prompting ──
 function commandOrPrompt(cmd, handler) {

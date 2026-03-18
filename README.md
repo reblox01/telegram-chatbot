@@ -75,11 +75,63 @@ curl "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://<your-verce
 | `/clear` | Clear conversation history |
 | `/model` | Show current AI model |
 | `/status` | Bot status & uptime |
-| `/weather [city]` | Weather lookup |
+| `/weather [city] | Weather lookup |
 | `/search [query]` | Web search (Tavily + DDG) |
 | `/wiki [query]` | Wikipedia lookup |
 | `/remind [time] [msg]` | Set reminder (`30m`, `1h`, `2d`) |
 | `/translate [lang] [text]` | Translate text |
+
+## Memory: Local vs Hosted Database
+
+The bot remembers conversations so users can have ongoing chats. But **where** that memory is stored matters.
+
+### Option A: Local File (default)
+
+When no `SUPABASE_URL` is set, the bot stores conversations in `data/memory.json` on disk.
+
+| Pros | Cons |
+|------|------|
+| Zero setup — works out of the box | **Lost on cold starts** (Vercel, Railway) |
+| Free — no external service needed | Memory resets every time the serverless function restarts |
+| Great for local development | Only works on persistent servers (VPS, local) |
+
+**Good for:** Testing locally, running on a VPS, or if you don't care about memory persistence.
+
+### Option B: Supabase (recommended for production)
+
+When `SUPABASE_URL` and `SUPABASE_KEY` are set, conversations are stored in a PostgreSQL database via Supabase.
+
+| Pros | Cons |
+|------|------|
+| **Persistent** — survives restarts, deploys, cold starts | 5 min setup (free signup + SQL) |
+| Works on Vercel, Railway, anywhere | Tied to Supabase's free tier (500MB, very generous) |
+| 500MB free — enough for thousands of users | |
+| PostgreSQL — battle-tested, won't disappear | |
+
+**Good for:** Production deployments, Vercel, any serverless platform, or when you want memory to actually work.
+
+### Setting Up Supabase (5 minutes)
+
+1. **Create account** at [supabase.com](https://supabase.com) (free, no credit card)
+2. **Create a new project** — pick any name, any region
+3. **Run the SQL setup:**
+   - Go to **SQL Editor** in the dashboard
+   - Click **New Query**
+   - Paste the contents of [`supabase-setup.sql`](./supabase-setup.sql)
+   - Click **Run**
+4. **Get your credentials:**
+   - Go to **Settings → API**
+   - Copy **Project URL** (looks like `https://xxxxx.supabase.co`)
+   - Copy **anon/public** key (starts with `eyJ...`)
+5. **Add to `.env`:**
+   ```env
+   SUPABASE_URL=https://xxxxx.supabase.co
+   SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5...
+   ```
+
+Done. The bot will automatically detect Supabase and use it instead of local files.
+
+**If you skip this:** The bot still works, but conversation memory resets on every serverless cold start (usually every few minutes on Vercel).
 
 ## Architecture
 
@@ -90,7 +142,8 @@ telegram-chatbot/
 ├── src/
 │   ├── bot.js              # Bot setup (polling mode)
 │   ├── chat.js             # AI chat with model fallback
-│   ├── memory.js           # JSON conversation memory
+│   ├── memory.js           # Memory: local file OR Supabase
+│   ├── supabase.js         # Supabase REST client (zero dependencies)
 │   ├── utils.js            # Helpers (sanitize, validate, parse)
 │   └── commands/
 │       ├── weather.js      # wttr.in weather API
@@ -99,7 +152,8 @@ telegram-chatbot/
 │       ├── translate.js    # MyMemory translation
 │       └── wiki.js         # Wikipedia REST API
 ├── data/
-│   └── .gitkeep            # Memory storage (gitignored)
+│   └── memory.json         # Local memory (gitignored)
+├── supabase-setup.sql      # SQL to create Supabase tables
 ├── .env.example            # Config template (no secrets)
 ├── .gitignore
 ├── package.json
@@ -128,7 +182,7 @@ Change in `src/chat.js` — any [OpenRouter model](https://openrouter.ai/models)
 |----------|-----|------|
 | **Vercel** | `vercel --prod` | Free (Hobby plan) |
 | **Railway** | Connect GitHub repo | Free tier available |
-| **Local** | `npm run dev` | Free |
+| **VPS** | `npm run dev` + pm2 | Depends on provider |
 
 ## License
 
