@@ -185,6 +185,26 @@ Change in `src/chat.js` — any [OpenRouter model](https://openrouter.ai/models)
 | **Railway** | Connect GitHub repo | Free tier available |
 | **VPS** | `npm run dev` + pm2 | Depends on provider |
 
+## Support
+
+If you appreciate my work and want to support my open-source contributions:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/arosck1)
+[![Sponsor](https://img.shields.io/badge/GitHub%20Sponsors-EA4AAA?style=for-the-badge&logo=github-sponsors&logoColor=white)](https://github.com/sponsors/reblox01)
+[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/sohailkoutari)
+
 ## License
 
-MIT
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.
+
+## Contact
+
+For any inquiries or support, please contact [Contact@sohailkoutari.com](mailto:contact@sohailkoutari.com).
+
+## Acknowledgements
+
+Thank you to everyone who has supported and contributed to this project. Your feedback and assistance are invaluable.
