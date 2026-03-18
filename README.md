@@ -1,154 +1,134 @@
 # 🤖 AI Telegram Chatbot
 
-A full-featured AI-powered Telegram chatbot with conversation memory, utility commands, and more.
+A full-featured, serverless AI-powered Telegram chatbot with conversation memory, web search, utilities, and customizable personality. Free to run.
 
 ## Features
 
-- 💬 **AI Chat** — Powered by OpenRouter (DeepSeek R1 free tier)
+- 💬 **AI Chat** — OpenRouter (multiple free models with auto-fallback)
 - 🧠 **Conversation Memory** — Remembers last 20 messages per user
+- 🔍 **Web Search** — Tavily API + DuckDuckGo fallback
 - 🌤️ **Weather** — Real-time weather via wttr.in
-- 🔍 **Search** — Web search via DuckDuckGo
 - ⏰ **Reminders** — Set timed reminders
-- 🌐 **Translate** — Multi-language translation
-- 📄 **Summarize** — Extract and summarize webpages
+- 🌐 **Translation** — Multi-language via MyMemory API
+- 📚 **Wikipedia** — Quick Wikipedia lookups with thumbnails
 - 🛡️ **Rate Limiting** — 20 messages/user/hour
-- 🔒 **OWASP Security** — Input validation, sanitization, env vars
+- 🔒 **Security** — Input validation, sanitization, env-only secrets
 
 ## Quick Start
 
 ### 1. Clone & Install
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/your-username/telegram-chatbot.git
 cd telegram-chatbot
 npm install
 ```
 
-### 2. Configure Environment
+### 2. Get API Keys
+
+| Key | Where | Free Tier |
+|-----|-------|-----------|
+| **Bot Token** | [@BotFather](https://t.me/BotFather) → `/newbot` | Free forever |
+| **OpenRouter** | [openrouter.ai](https://openrouter.ai) → API Keys | 50+ free models |
+| **Tavily** (optional) | [tavily.com](https://tavily.com) → API Key | 1000/month free |
+
+### 3. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
+Edit `.env` with your keys:
+
+```env
+BOT_TOKEN=your_bot_token_here
+OPENROUTER_API_KEY=your_openrouter_key_here
+TAVILY_API_KEY=your_tavily_key_here
+BOT_NAME=My Bot
+BOT_CREATOR=your name
 ```
-BOT_TOKEN=your_telegram_bot_token_here
-OPENROUTER_API_KEY=your_openrouter_api_key_here
-NODE_ENV=development
-```
 
-**Get your keys:**
-- **Bot Token:** Message [@BotFather](https://t.me/BotFather) on Telegram → `/newbot`
-- **OpenRouter Key:** Sign up at [openrouter.ai](https://openrouter.ai) → API Keys
+### 4. Run
 
-### 3. Run Locally (Polling)
-
+**Development (polling mode):**
 ```bash
 npm run dev
 ```
 
-Your bot is now running! Open Telegram and send `/start` to your bot.
+**Production (Vercel serverless):**
+```bash
+npm i -g vercel
+vercel --prod
+```
+
+Then set your webhook:
+```bash
+curl "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook?url=https://<your-vercel-url>.vercel.app/api/webhook"
+```
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/start` | Welcome message & instructions |
+| `/start` | Welcome message |
 | `/help` | List all commands |
 | `/clear` | Clear conversation history |
 | `/model` | Show current AI model |
 | `/status` | Bot status & uptime |
 | `/weather [city]` | Weather lookup |
-| `/search [query]` | Quick web search |
-| `/remind [time] [msg]` | Set a reminder (e.g., `30m`, `1h`, `2d`) |
-| `/translate [lang] [text]` | Translate text (e.g., `/translate fr hello`) |
-| `/summarize [url]` | Summarize a webpage |
-
-## Deploy to Vercel (Serverless)
-
-### 1. Install Vercel CLI
-
-```bash
-npm i -g vercel
-```
-
-### 2. Deploy
-
-```bash
-vercel --prod
-```
-
-### 3. Set Environment Variables
-
-In your Vercel dashboard → Settings → Environment Variables:
-- `BOT_TOKEN` — Your Telegram bot token
-- `OPENROUTER_API_KEY` — Your OpenRouter API key
-
-### 4. Set Webhook
-
-After deployment, set your bot's webhook URL:
-
-```bash
-curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://<your-vercel-url>.vercel.app/api/webhook"
-```
-
-Verify it's working:
-```bash
-curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getWebhookInfo"
-```
-
-## Deploy to Railway
-
-1. Create a new project on [Railway](https://railway.app)
-2. Connect your GitHub repo
-3. Set environment variables: `BOT_TOKEN`, `OPENROUTER_API_KEY`
-4. Set start command: `node src/bot.js`
-5. Set webhook URL to your Railway domain
+| `/search [query]` | Web search (Tavily + DDG) |
+| `/wiki [query]` | Wikipedia lookup |
+| `/remind [time] [msg]` | Set reminder (`30m`, `1h`, `2d`) |
+| `/translate [lang] [text]` | Translate text |
 
 ## Architecture
 
 ```
 telegram-chatbot/
 ├── api/
-│   └── webhook.js        # Vercel serverless function
+│   └── webhook.js          # Vercel serverless entry
 ├── src/
-│   ├── bot.js            # Bot setup + commands (polling mode)
-│   ├── chat.js           # AI chat logic + OpenRouter API
-│   ├── memory.js         # Conversation memory (JSON storage)
-│   ├── commands/
-│   │   ├── weather.js    # Weather via wttr.in
-│   │   ├── search.js     # Web search via DuckDuckGo
-│   │   ├── remind.js     # Reminder system
-│   │   ├── translate.js  # Translation via MyMemory API
-│   │   └── summarize.js  # Webpage summarizer
-│   └── utils.js          # Helpers (sanitize, validate, parse)
+│   ├── bot.js              # Bot setup (polling mode)
+│   ├── chat.js             # AI chat with model fallback
+│   ├── memory.js           # JSON conversation memory
+│   ├── utils.js            # Helpers (sanitize, validate, parse)
+│   └── commands/
+│       ├── weather.js      # wttr.in weather API
+│       ├── search.js       # Tavily + DuckDuckGo search
+│       ├── remind.js       # Timed reminders
+│       ├── translate.js    # MyMemory translation
+│       └── wiki.js         # Wikipedia REST API
 ├── data/
-│   └── memory.json       # Conversation storage (gitignored)
-├── package.json
-├── vercel.json           # Vercel deployment config
-├── .env.example          # Template (no secrets)
+│   └── .gitkeep            # Memory storage (gitignored)
+├── .env.example            # Config template (no secrets)
 ├── .gitignore
+├── package.json
+├── vercel.json             # Vercel deployment config
 └── README.md
 ```
 
 ## Security
 
 - ✅ All inputs validated and sanitized
-- ✅ Bot token stored in environment variables
+- ✅ API keys stored in environment variables only
 - ✅ Rate limiting (20 messages/user/hour)
-- ✅ Error handling with graceful failures
-- ✅ No secrets in code or git
-- ✅ Markdown escaping for Telegram API
+- ✅ No secrets in code or git history
+- ✅ Markdown escaping for Telegram API safety
+- ✅ Graceful error handling
 
 ## AI Models
 
-Default model: `deepseek/deepseek-r1:free` (free tier on OpenRouter)
+Default: `nvidia/nemotron-3-super-120b-a12b:free` with auto-fallback to `step-3.5-flash:free`.
 
-Other free models to try:
-- `qwen/qwen-2.5-72b-instruct:free`
-- `google/gemma-2-9b-it:free`
+Change in `src/chat.js` — any [OpenRouter model](https://openrouter.ai/models) works.
 
-Change the `MODEL` constant in `src/chat.js`.
+## Deploy Options
+
+| Platform | How | Cost |
+|----------|-----|------|
+| **Vercel** | `vercel --prod` | Free (Hobby plan) |
+| **Railway** | Connect GitHub repo | Free tier available |
+| **Local** | `npm run dev` | Free |
 
 ## License
 

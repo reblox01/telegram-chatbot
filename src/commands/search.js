@@ -69,7 +69,7 @@ async function search(ctx) {
   try {
     const response = await axios.get(
       `https://api.duckduckgo.com/?q=${encodeURIComponent(sanitized)}&format=json&no_html=1&skip_disambig=1`,
-      { timeout: 8000, headers: { 'User-Agent': 'SewelniBot/1.0' } }
+      { timeout: 8000, headers: { 'User-Agent': 'TelegramBot/1.0' } }
     );
 
     const data = response.data;
