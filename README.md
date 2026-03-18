@@ -19,18 +19,19 @@ A full-featured, serverless AI-powered Telegram chatbot with conversation memory
 ### 1. Clone & Install
 
 ```bash
-git clone https://github.com/your-username/telegram-chatbot.git
+git clone https://github.com/reblox01/telegram-chatbot.git
 cd telegram-chatbot
 npm install
 ```
 
 ### 2. Get API Keys
 
-| Key | Where | Free Tier |
-|-----|-------|-----------|
-| **Bot Token** | [@BotFather](https://t.me/BotFather) → `/newbot` | Free forever |
-| **OpenRouter** | [openrouter.ai](https://openrouter.ai) → API Keys | 50+ free models |
-| **Tavily** (optional) | [tavily.com](https://tavily.com) → API Key | 1000/month free |
+| Key | Where | Free Tier | Required |
+|-----|-------|-----------|----------|
+| **Bot Token** | [@BotFather](https://t.me/BotFather) → `/newbot` | Free forever | ✅ Yes |
+| **OpenRouter** | [openrouter.ai](https://openrouter.ai) → API Keys | 50+ free models | ✅ Yes |
+| **Tavily** (optional) | [tavily.com](https://tavily.com) → API Key | 1000/month free | ❌ No |
+| **Supabase** (optional) | [supabase.com](https://supabase.com) → New Project | 500MB free | ❌ No (local file fallback) |
 
 ### 3. Configure
 
