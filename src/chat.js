@@ -6,7 +6,10 @@ if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
 }
 
 const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
-const MODEL = 'stepfun/step-3.5-flash:free';
+const MODELS = [
+  { id: 'nvidia/nemotron-3-super-120b-a12b:free', reasoning: false },
+  { id: 'stepfun/step-3.5-flash:free', reasoning: null },
+];
 const MAX_CONTEXT = 20;
 const SYSTEM_PROMPT = `You are Sewelni, a friendly and helpful AI assistant created by xanx (Sohail). You're smart, concise, and have a warm personality.
 
@@ -40,6 +43,34 @@ const SYSTEM_PROMPT = `You are Sewelni, a friendly and helpful AI assistant crea
 - Be helpful but don't be preachy
 - Don't refuse reasonable requests`;
 
+async function callModel(model, messages) {
+  const body = {
+    model: model.id,
+    messages: messages,
+    max_tokens: 512,
+    temperature: 0.7,
+  };
+  // Disable reasoning output for reasoning models (so content isn't empty)
+  if (model.reasoning === false) {
+    body.include_reasoning = false;
+  }
+
+  const response = await axios.post(
+    'https://openrouter.ai/api/v1/chat/completions',
+    body,
+    {
+      headers: {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://github.com/telegram-chatbot',
+      },
+      timeout: 15000,
+    }
+  );
+
+  return response.data?.choices?.[0]?.message?.content || null;
+}
+
 async function chat(userId, message, memory) {
   if (!validateInput(message, 4000)) {
     return '⚠️ Message too long or invalid. Please keep messages under 4000 characters.';
@@ -53,45 +84,26 @@ async function chat(userId, message, memory) {
     { role: 'user', content: message }
   ];
 
-  try {
-    const response = await axios.post(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        model: MODEL,
-        messages: messages,
-        max_tokens: 512,
-        temperature: 0.7,
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://github.com/telegram-chatbot',
-        },
-        timeout: 15000,
+  // Try primary model, fall back to secondary
+  for (const model of MODELS) {
+    try {
+      const reply = await callModel(model, messages);
+      if (reply && reply.trim().length > 0) {
+        // Store conversation
+        memory.addMessage(userId, 'user', message);
+        memory.addMessage(userId, 'assistant', reply);
+        return truncate(reply, 4000);
       }
-    );
-
-    const reply = response.data?.choices?.[0]?.message?.content || 'Sorry, I couldn\'t generate a response.';
-    
-    // Store conversation
-    memory.addMessage(userId, 'user', message);
-    memory.addMessage(userId, 'assistant', reply);
-
-    return truncate(reply, 4000);
-  } catch (err) {
-    const errorMsg = err?.response?.data || err.message;
-    console.error('[Chat] OpenRouter error:', JSON.stringify(errorMsg));
-    console.error('[Chat] Model:', MODEL, 'Key prefix:', OPENROUTER_API_KEY?.substring(0, 15));
-    
-    if (err?.response?.status === 429) {
-      return '⏳ Rate limited by AI provider. Please try again in a moment.';
+      console.warn(`[Chat] Model ${model.id} returned empty, trying fallback...`);
+    } catch (err) {
+      const errorMsg = err?.response?.data || err.message;
+      console.error(`[Chat] Model ${model.id} error:`, JSON.stringify(errorMsg));
+      // Try next model
+      continue;
     }
-    if (err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT') {
-      return '⏱️ AI response timed out. Please try again.';
-    }
-    return '❌ AI service is temporarily unavailable. Please try again later. Error: ' + JSON.stringify(errorMsg).substring(0, 200);
   }
+
+  return '❌ AI service is temporarily unavailable. Please try again later.';
 }
 
-module.exports = { chat, MODEL };
+module.exports = { chat, MODEL: MODELS[0].id };
