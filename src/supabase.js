@@ -21,7 +21,7 @@ class SupabaseStore {
           'apikey': this.key,
           'Authorization': `Bearer ${this.key}`,
           'Content-Type': 'application/json',
-          'Prefer': method === 'POST' ? 'return=representation' : 'return=minimal',
+          'Prefer': method === 'POST' ? 'return=representation,resolution=merge-duplicates' : 'return=minimal',
         },
       };
 
