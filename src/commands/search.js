@@ -4,11 +4,15 @@ const { sanitizeText, validateInput, truncate } = require('../utils');
 async function search(ctx) {
   const query = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
 
-  if (!validateInput(query, 200)) {
-    return ctx.reply('🔍 Please provide a search query.\nExample: `/search what is solana blockchain`', { parse_mode: 'Markdown' });
+  if (!query || !validateInput(query, 200)) {
+    return ctx.reply(
+      '🔍 *Search Command*\n\nUsage: `/search [query]`\n\nExample: `/search what is solana blockchain`',
+      { parse_mode: 'Markdown' }
+    );
   }
 
   const sanitized = sanitizeText(query);
+  const ddgUrl = `https://duckduckgo.com/?q=${encodeURIComponent(sanitized)}`;
 
   try {
     // Use DuckDuckGo instant answer API
@@ -34,50 +38,28 @@ async function search(ctx) {
       }
     }
 
-    // If DDG returned nothing useful, try to use AI
-    if (!result) {
-      const aiResult = await aiSearch(query);
-      return await ctx.reply(aiResult, { parse_mode: 'Markdown', disable_web_page_preview: true });
+    if (result) {
+      await ctx.reply(result, { parse_mode: 'Markdown', disable_web_page_preview: true });
+    } else {
+      // No DDG results — just say so, no AI editorializing
+      await ctx.reply(
+        `🔍 No results found for *${escapeM(truncate(sanitized, 50))}*.\n\n` +
+        `Try searching directly:\n🔗 [DuckDuckGo](${ddgUrl})`,
+        { parse_mode: 'Markdown', disable_web_page_preview: true }
+      );
     }
-
-    await ctx.reply(result, { parse_mode: 'Markdown', disable_web_page_preview: true });
   } catch (err) {
     console.error('[Search] DDG Error:', err.message);
-    // Fallback to AI search
-    try {
-      const aiResult = await aiSearch(query);
-      await ctx.reply(aiResult, { parse_mode: 'Markdown', disable_web_page_preview: true });
-    } catch (aiErr) {
-      await ctx.reply('❌ Search is temporarily unavailable. Try searching on [DuckDuckGo](https://duckduckgo.com/?q=' + encodeURIComponent(sanitized) + ') directly.', { parse_mode: 'Markdown' });
-    }
+    await ctx.reply(
+      `🔍 Search unavailable right now.\n\n` +
+      `Try searching directly:\n🔗 [DuckDuckGo](${ddgUrl})`,
+      { parse_mode: 'Markdown', disable_web_page_preview: true }
+    );
   }
 }
 
-// AI-powered search fallback
-async function aiSearch(query) {
-  const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
-  const response = await axios.post(
-    'https://openrouter.ai/api/v1/chat/completions',
-    {
-      model: 'stepfun/step-3.5-flash:free',
-      messages: [
-        { role: 'system', content: 'You are a helpful search assistant. Answer the user\'s query concisely with factual information. If you don\'t know, say so. Include key facts. Keep it under 1500 characters.' },
-        { role: 'user', content: query }
-      ],
-      max_tokens: 400,
-      temperature: 0.3,
-    },
-    {
-      headers: {
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 12000,
-    }
-  );
-
-  const reply = response.data?.choices?.[0]?.message?.content || 'No results found.';
-  return `🔍 *AI Search: ${query}*\n\n${reply}`;
+function escapeM(text) {
+  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
 }
 
 module.exports = { search };
