@@ -6,7 +6,7 @@ if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
 }
 
 const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
-const MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
+const MODEL = 'stepfun/step-3.5-flash:free';
 const MAX_CONTEXT = 20;
 const SYSTEM_PROMPT = `You are Sewelni, a friendly and helpful AI assistant created by xanx (Sohail). You're smart, concise, and have a warm personality.
 
