@@ -222,9 +222,18 @@ bot.on('callback_query', async (ctx) => {
   if (!isAdmin(userId)) return ctx.answerCbQuery('🔒 Admin only.');
 
   if (data === 'admin_refresh') {
-    const { text, keyboard } = await buildAdminPanel();
-    await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
-    return ctx.answerCbQuery('✅ Refreshed!');
+    try {
+      // Clear config cache to force fresh read
+      premium.configCache = {};
+      premium.configCacheTime = 0;
+      const { text, keyboard } = await buildAdminPanel();
+      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+      return ctx.answerCbQuery('✅ Refreshed!');
+    } catch (err) {
+      console.error('[Admin] Refresh error:', err.message);
+      await ctx.editMessageText('❌ Error refreshing. Check logs.', { parse_mode: 'Markdown' });
+      return ctx.answerCbQuery('❌ Error');
+    }
   }
 
   const actions = {

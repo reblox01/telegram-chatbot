@@ -270,9 +270,18 @@ bot.on('callback_query', async (ctx) => {
 
   // ── Refresh ──
   if (data === 'admin_refresh') {
-    const { text, keyboard } = await buildAdminPanel();
-    await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
-    return ctx.answerCbQuery('✅ Refreshed!');
+    try {
+      // Clear config cache to force fresh read
+      premium.configCache = {};
+      premium.configCacheTime = 0;
+      const { text, keyboard } = await buildAdminPanel();
+      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+      return ctx.answerCbQuery('✅ Refreshed!');
+    } catch (err) {
+      console.error('[Admin] Refresh error:', err.message);
+      await ctx.editMessageText('❌ Error refreshing. Check logs.', { parse_mode: 'Markdown' });
+      return ctx.answerCbQuery('❌ Error');
+    }
   }
 
   // ── Free Model ──
@@ -474,20 +483,24 @@ bot.on('text', async (ctx) => {
     // Free Model
     if (action === 'admin_set_free_model') {
       pendingCommands.delete(ctx.from.id);
-      try {
-        await supaUpsert('bot_config', { key: 'free_model', value: msg.trim(), updated_at: new Date().toISOString() });
+      const success = await premium.setConfig('free_model', msg.trim());
+      if (success) {
         return ctx.reply(`✅ Free model set to: \`${msg.trim()}\``, { parse_mode: 'Markdown' });
-      } catch (e) { return ctx.reply('❌ Error: ' + e.message.substring(0, 200)); }
+      } else {
+        return ctx.reply('❌ Failed to set free model. Check logs.');
+      }
     }
 
     // Premium Model
     if (action === 'admin_set_premium_model') {
       pendingCommands.delete(ctx.from.id);
       const models = msg.trim().split(',').map(s => s.trim()).filter(Boolean);
-      try {
-        await supaUpsert('bot_config', { key: 'premium_models', value: models, updated_at: new Date().toISOString() });
+      const success = await premium.setConfig('premium_models', models);
+      if (success) {
         return ctx.reply(`✅ Premium models set to:\n\`${models.join('\`, \`')}\``, { parse_mode: 'Markdown' });
-      } catch (e) { return ctx.reply('❌ Error: ' + e.message.substring(0, 200)); }
+      } else {
+        return ctx.reply('❌ Failed to set premium models. Check logs.');
+      }
     }
 
     // Free Limits
@@ -496,10 +509,12 @@ bot.on('text', async (ctx) => {
       const parts = msg.trim().split(/\s+/);
       if (parts.length !== 3) return ctx.reply('❌ Format: `msgs searches reminds`\nExample: `20 5 3`', { parse_mode: 'Markdown' });
       const limits = { messagesPerDay: parseInt(parts[0]), searchesPerDay: parseInt(parts[1]), remindersActive: parseInt(parts[2]) };
-      try {
-        await supaUpsert('bot_config', { key: 'free_limits', value: limits, updated_at: new Date().toISOString() });
+      const success = await premium.setConfig('free_limits', limits);
+      if (success) {
         return ctx.reply(`✅ Free limits set:\n💬 ${limits.messagesPerDay} msgs | 🔍 ${limits.searchesPerDay} searches | ⏰ ${limits.remindersActive} reminds`);
-      } catch (e) { return ctx.reply('❌ Error: ' + e.message.substring(0, 200)); }
+      } else {
+        return ctx.reply('❌ Failed to set free limits. Check logs.');
+      }
     }
 
     // Premium Limits
@@ -508,10 +523,12 @@ bot.on('text', async (ctx) => {
       const parts = msg.trim().split(/\s+/);
       if (parts.length !== 3) return ctx.reply('❌ Format: `msgs searches reminds`\nExample: `-1 -1 -1` (unlimited)', { parse_mode: 'Markdown' });
       const limits = { messagesPerDay: parseInt(parts[0]), searchesPerDay: parseInt(parts[1]), remindersActive: parseInt(parts[2]) };
-      try {
-        await supaUpsert('bot_config', { key: 'premium_limits', value: limits, updated_at: new Date().toISOString() });
+      const success = await premium.setConfig('premium_limits', limits);
+      if (success) {
         return ctx.reply(`✅ Premium limits set:\n💬 ${limits.messagesPerDay} msgs | 🔍 ${limits.searchesPerDay} searches | ⏰ ${limits.remindersActive} reminds`);
-      } catch (e) { return ctx.reply('❌ Error: ' + e.message.substring(0, 200)); }
+      } else {
+        return ctx.reply('❌ Failed to set premium limits. Check logs.');
+      }
     }
 
     // Premium Price
@@ -519,10 +536,12 @@ bot.on('text', async (ctx) => {
       pendingCommands.delete(ctx.from.id);
       const price = parseInt(msg.trim());
       if (isNaN(price) || price < 1) return ctx.reply('❌ Send a number (minimum 1).');
-      try {
-        await supaUpsert('bot_config', { key: 'premium_price', value: price, updated_at: new Date().toISOString() });
+      const success = await premium.setConfig('premium_price', price);
+      if (success) {
         return ctx.reply(`✅ Premium price set to: ${price} ⭐`);
-      } catch (e) { return ctx.reply('❌ Error: ' + e.message.substring(0, 200)); }
+      } else {
+        return ctx.reply('❌ Failed to set premium price. Check logs.');
+      }
     }
 
     // Grant Premium
