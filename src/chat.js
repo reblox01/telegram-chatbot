@@ -8,10 +8,18 @@ if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
 const OPENROUTER_API_KEY = (process.env.OPENROUTER_API_KEY || '').trim();
 const BOT_NAME = process.env.BOT_NAME || 'AI Bot';
 const CREATOR = process.env.BOT_CREATOR || 'the developer';
-const MODELS = [
-  { id: 'nvidia/nemotron-3-super-120b-a12b:free', reasoning: false },
-  { id: 'stepfun/step-3.5-flash:free', reasoning: null },
-];
+
+// ── Models ──
+const MODELS = {
+  free: [
+    { id: 'stepfun/step-3.5-flash:free', reasoning: null },
+  ],
+  premium: [
+    { id: 'anthropic/claude-3.5-sonnet', reasoning: true },
+    { id: 'openai/gpt-4o-mini', reasoning: false },
+  ],
+};
+
 const MAX_CONTEXT = 20;
 const SYSTEM_PROMPT = `You are ${BOT_NAME}, a friendly and helpful AI assistant. You're smart, concise, and have a warm personality.
 
@@ -52,8 +60,13 @@ async function callModel(model, messages) {
     max_tokens: 512,
     temperature: 0.7,
   };
+
   if (model.reasoning === false) {
     body.include_reasoning = false;
+  }
+  if (model.reasoning === true) {
+    body.reasoning = { effort: 'medium' };
+    body.max_tokens = 1024; // premium gets more tokens
   }
 
   const response = await axios.post(
@@ -65,19 +78,20 @@ async function callModel(model, messages) {
         'Content-Type': 'application/json',
         'HTTP-Referer': 'https://github.com/telegram-chatbot',
       },
-      timeout: 15000,
+      timeout: 30000, // premium gets more time
     }
   );
 
   return response.data?.choices?.[0]?.message?.content || null;
 }
 
-async function chat(userId, message, memory) {
+async function chat(userId, message, memory, isPremium = false) {
   if (!validateInput(message, 4000)) {
     return '⚠️ Message too long or invalid. Please keep messages under 4000 characters.';
   }
 
   const history = await memory.getMessages(userId, MAX_CONTEXT);
+  const models = isPremium ? MODELS.premium : MODELS.free;
 
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -85,7 +99,7 @@ async function chat(userId, message, memory) {
     { role: 'user', content: message }
   ];
 
-  for (const model of MODELS) {
+  for (const model of models) {
     try {
       const reply = await callModel(model, messages);
       if (reply && reply.trim().length > 0) {
@@ -104,4 +118,4 @@ async function chat(userId, message, memory) {
   return '❌ AI service is temporarily unavailable. Please try again later.';
 }
 
-module.exports = { chat, MODEL: MODELS[0].id };
+module.exports = { chat, MODELS };

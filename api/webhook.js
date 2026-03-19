@@ -1,6 +1,7 @@
 const { Telegraf } = require('telegraf');
 const Memory = require('../src/memory');
-const { chat, MODEL } = require('../src/chat');
+const { chat, MODELS } = require('../src/chat');
+const { PremiumManager, PREMIUM_PRICE } = require('../src/premium');
 const { formatUptime, validateInput } = require('../src/utils');
 const { weather } = require('../src/commands/weather');
 const { search } = require('../src/commands/search');
@@ -16,11 +17,12 @@ const CREATOR = process.env.BOT_CREATOR || 'the developer';
 
 const bot = new Telegraf(BOT_TOKEN);
 const memory = new Memory();
+const premium = new PremiumManager();
 const startTime = Date.now();
 
 // Rate limiting
 const rateLimits = new Map();
-const RATE_LIMIT = 20;
+const RATE_LIMIT = 60;
 const RATE_WINDOW = 3600000;
 const pendingCommands = new Map();
 
@@ -40,7 +42,7 @@ function checkRateLimit(userId) {
 // ── Middleware ──
 bot.use(async (ctx, next) => {
   if (ctx.from && !checkRateLimit(ctx.from.id)) {
-    return ctx.reply('⏳ Rate limit reached (20 messages/hour). Please wait.');
+    return ctx.reply('⏳ Rate limit reached. Please wait.');
   }
   return next();
 });
@@ -57,6 +59,7 @@ bot.start((ctx) => ctx.reply(
   `💬 Just send me any message to chat!\n\n` +
   `📋 *Commands:*\n` +
   `/help — All commands\n` +
+  `/premium — Upgrade to Premium ✨\n` +
   `/weather [city] — Weather\n` +
   `/search [query] — Web search\n` +
   `/remind [time] [msg] — Reminder\n` +
@@ -72,6 +75,7 @@ bot.start((ctx) => ctx.reply(
 bot.command('help', (ctx) => ctx.reply(
   `🤖 *${BOT_NAME} — Commands*\n\n` +
   `💬 Send any message to chat with me!\n\n` +
+  `✨ /premium — Upgrade to Premium\n` +
   `🌤 /weather [city] — Weather\n` +
   `🔍 /search [query] — Web search\n` +
   `⏰ /remind [time] [msg] — Reminder\n` +
@@ -88,26 +92,123 @@ bot.command('clear', async (ctx) => {
   ctx.reply('🧹 History cleared! Ready for a fresh start!');
 });
 
-bot.command('model', (ctx) => ctx.reply(
-  `🧠 *${BOT_NAME}'s Brain*\n\nModel: \`${MODEL}\``,
-  { parse_mode: 'Markdown' }
-));
-
-bot.command('status', async (ctx) => {
-  const msgCount = await memory.getMessageCount(ctx.from.id);
+bot.command('model', async (ctx) => {
+  const isPremium = await premium.isPremium(ctx.from.id);
+  const model = isPremium ? 'Claude 3.5 Sonnet + 🧠 Thinking' : 'Step 3.5 Flash (Free)';
   ctx.reply(
-    `📊 *${BOT_NAME} Status*\n\n` +
-    `🟢 Online\n` +
-    `⏱ Uptime: ${formatUptime(startTime)}\n` +
-    `💬 Messages: ${msgCount}\n` +
-    `🧠 Model: \`${MODEL}\``,
+    `🧠 *${BOT_NAME}'s Brain*\n\n` +
+    `Model: ${model}\n` +
+    `Status: ${isPremium ? '💎 Premium' : '🆓 Free'}`,
     { parse_mode: 'Markdown' }
   );
 });
 
-// ── Commands with param prompting ──
+bot.command('status', async (ctx) => {
+  const msgCount = await memory.getMessageCount(ctx.from.id);
+  const info = await premium.getPremiumInfo(ctx.from.id);
+  const status = info.isPremium ? '💎 Premium' : '🆓 Free';
+  const model = info.isPremium ? 'Claude 3.5 Sonnet + Thinking' : 'Step 3.5 Flash';
+
+  let usageText = '';
+  if (!info.isPremium) {
+    usageText = `\n📊 *Today's Usage:*\n` +
+      `💬 Messages: ${info.usage.messages}/${info.limits.messages}\n` +
+      `🔍 Searches: ${info.usage.searches}/${info.limits.searches}`;
+  }
+
+  ctx.reply(
+    `📊 *${BOT_NAME} Status*\n\n` +
+    `🟢 Online\n` +
+    `⏱ Uptime: ${formatUptime(startTime)}\n` +
+    `💬 Total messages: ${msgCount}\n` +
+    `🧠 Model: ${model}\n` +
+    `💳 Plan: ${status}${usageText}`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// ── Premium Command ──
+bot.command('premium', async (ctx) => {
+  const info = await premium.getPremiumInfo(ctx.from.id);
+
+  if (info.isPremium) {
+    return ctx.reply(
+      `💎 *You're already Premium!*\n\n` +
+      `✅ Unlimited messages\n` +
+      `✅ Claude 3.5 Sonnet + 🧠 Thinking\n` +
+      `✅ Unlimited search & reminders\n\n` +
+      `Your plan is active. Enjoy! 🎉`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  await ctx.replyWithInvoice({
+    title: `${BOT_NAME} Premium ✨`,
+    description: 'Unlock unlimited messages, Claude 3.5 Sonnet with thinking, and unlimited search & reminders for 30 days!',
+    payload: `premium_${ctx.from.id}_${Date.now()}`,
+    currency: 'XTR',
+    prices: [{ label: 'Premium 30 days', amount: PREMIUM_PRICE }],
+  });
+});
+
+// ── Telegram Stars Payment Handlers ──
+bot.on('pre_checkout_query', async (ctx) => {
+  await ctx.answerPreCheckoutQuery(true);
+});
+
+bot.on('successful_payment', async (ctx) => {
+  const userId = ctx.from.id;
+  const payment = ctx.message.successful_payment;
+
+  console.log(`[Premium] Payment received from ${userId}: ${payment.total_amount} ${payment.currency}`);
+
+  if (payment.currency === 'XTR') {
+    const success = await premium.activatePremium(userId, 30);
+    if (success) {
+      await ctx.reply(
+        `🎉 *Premium Activated!*\n\n` +
+        `✅ Unlimited messages\n` +
+        `✅ Claude 3.5 Sonnet + 🧠 Thinking\n` +
+        `✅ Unlimited search & reminders\n` +
+        `✅ 30 days of premium\n\n` +
+        `Thank you for supporting ${BOT_NAME}! 💎`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      await ctx.reply('❌ Failed to activate premium. Please contact support.');
+    }
+  }
+});
+
+// ── Commands with limits ──
 function commandOrPrompt(cmd, handler) {
-  bot.command(cmd, (ctx) => {
+  bot.command(cmd, async (ctx) => {
+    // Check limit for search/remind
+    if (cmd === 'search') {
+      const canSearch = await premium.canUse(ctx.from.id, 'search');
+      if (!canSearch.allowed) {
+        return ctx.reply(
+          `🔒 Search limit reached (${canSearch.current}/${canSearch.limit} today).\n\n` +
+          `✨ Upgrade to Premium for unlimited search!\n` +
+          `Tap /premium to upgrade.`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+      await premium.incrementUsage(ctx.from.id, 'search');
+    }
+    if (cmd === 'remind') {
+      const canRemind = await premium.canUse(ctx.from.id, 'remind');
+      if (!canRemind.allowed) {
+        return ctx.reply(
+          `🔒 Reminder limit reached (${canRemind.current}/${canRemind.limit}).\n\n` +
+          `✨ Upgrade to Premium for unlimited reminders!\n` +
+          `Tap /premium to upgrade.`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+      await premium.incrementUsage(ctx.from.id, 'remind');
+    }
+
     const args = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
     if (!args) {
       pendingCommands.set(ctx.from.id, { command: cmd, ts: Date.now() });
@@ -153,13 +254,56 @@ bot.on('text', async (ctx) => {
     pendingCommands.delete(ctx.from.id);
     const fakeCtx = { ...ctx, message: { ...ctx.message, text: `/${pending.command} ${msg}` } };
 
+    // Check limits for search/remind
+    if (pending.command === 'search') {
+      const canSearch = await premium.canUse(ctx.from.id, 'search');
+      if (!canSearch.allowed) {
+        return ctx.reply(
+          `🔒 Search limit reached (${canSearch.current}/${canSearch.limit} today).\n\n` +
+          `✨ Upgrade to Premium for unlimited search!\n` +
+          `Tap /premium to upgrade.`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+      await premium.incrementUsage(ctx.from.id, 'search');
+    }
+    if (pending.command === 'remind') {
+      const canRemind = await premium.canUse(ctx.from.id, 'remind');
+      if (!canRemind.allowed) {
+        return ctx.reply(
+          `🔒 Reminder limit reached (${canRemind.current}/${canRemind.limit}).\n\n` +
+          `✨ Upgrade to Premium for unlimited reminders!\n` +
+          `Tap /premium to upgrade.`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+      await premium.incrementUsage(ctx.from.id, 'remind');
+    }
+
     const handlers = { weather, search, remind, translate, wiki };
     if (handlers[pending.command]) return handlers[pending.command](fakeCtx);
   }
 
+  // Check daily message limit
+  const canChat = await premium.canUse(ctx.from.id, 'message');
+  if (!canChat.allowed) {
+    return ctx.reply(
+      `🔒 Daily limit reached! (${canChat.current}/${canChat.limit} messages today)\n\n` +
+      `✨ Upgrade to Premium for:\n` +
+      `• Unlimited messages\n` +
+      `• Claude 3.5 Sonnet + 🧠 Thinking\n` +
+      `• Better, smarter responses\n\n` +
+      `Tap /premium to upgrade!`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  const isPremium = await premium.isPremium(ctx.from.id);
+
   await ctx.replyWithChatAction('typing');
   try {
-    const reply = await chat(ctx.from.id, msg, memory);
+    const reply = await chat(ctx.from.id, msg, memory, isPremium);
+    await premium.incrementUsage(ctx.from.id, 'message');
     await ctx.reply(reply);
   } catch (e) {
     console.error('[Bot] Chat error:', e.message);
@@ -173,8 +317,9 @@ module.exports = async (req, res) => {
     res.status(200).json({
       status: 'ok',
       uptime: formatUptime(startTime),
-      model: MODEL,
+      model: MODELS.free[0].id,
       botName: BOT_NAME,
+      premium: true,
       vercel: !!process.env.VERCEL,
     });
     return;
