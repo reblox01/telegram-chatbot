@@ -198,13 +198,10 @@ class PremiumManager {
         const current = await this.getUsage(key);
         const update = { chat_id: key, date: today, updated_at: new Date().toISOString() };
 
+        // Only increment the specific counter - no double-counting
         if (type === 'message') update.message_count = (current.message_count || 0) + 1;
         else if (type === 'search') update.search_count = (current.search_count || 0) + 1;
         else if (type === 'remind') update.remind_count = (current.remind_count || 0) + 1;
-
-        if (type !== 'message') {
-          update.message_count = (current.message_count || 0) + 1;
-        }
 
         await this.supabase.request('POST', `/bot_usage?on_conflict=chat_id,date`, update);
       } catch (err) {
@@ -217,7 +214,6 @@ class PremiumManager {
       if (type === 'message') this.localUsage[key].message_count++;
       else if (type === 'search') this.localUsage[key].search_count++;
       else if (type === 'remind') this.localUsage[key].remind_count++;
-      if (type !== 'message') this.localUsage[key].message_count++;
     }
   }
 
