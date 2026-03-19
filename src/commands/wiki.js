@@ -1,47 +1,64 @@
 const axios = require('axios');
 const { sanitizeText, validateInput, truncate, escapeMarkdown: escapeM } = require('../utils');
 
+const WIKI_API = 'https://en.wikipedia.org/api/rest_v1';
+const WIKI_SEARCH = 'https://en.wikipedia.org/w/api.php';
+const USER_AGENT = 'TelegramBot/1.0';
+
 async function wiki(ctx) {
   const query = ctx.message.text.split(/\s+/).slice(1).join(' ').trim();
 
   if (!query || !validateInput(query, 200)) {
-    return ctx.reply(
-      '📚 *Wikipedia Lookup*\n\nUsage: `/wiki [query]`\n\n' +
-      'Examples:\n' +
-      '• `/wiki solana`\n' +
-      '• `/wiki blockchain`\n' +
-      '• `/wiki elon musk`',
-      { parse_mode: 'Markdown' }
-    );
+    return ctx.reply('❌ Please include a search query.\nExample: `/wiki solana`', { parse_mode: 'Markdown' });
   }
 
   const sanitized = sanitizeText(query);
 
   try {
-    // Search for the article
-    const searchRes = await axios.get(
-      `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(sanitized)}`,
-      { timeout: 8000, headers: { 'User-Agent': 'TelegramBot/1.0' } }
-    );
+    // Step 1: Search for the article (handles typos and partial names)
+    const searchRes = await axios.get(WIKI_SEARCH, {
+      params: {
+        action: 'query',
+        list: 'search',
+        srsearch: sanitized,
+        srlimit: 1,
+        format: 'json',
+      },
+      timeout: 8000,
+      headers: { 'User-Agent': USER_AGENT },
+    });
 
-    const data = searchRes.data;
-
-    if (!data || !data.extract) {
+    const results = searchRes.data?.query?.search;
+    if (!results || results.length === 0) {
       return ctx.reply(
         `📚 No Wikipedia article found for *${escapeM(truncate(sanitized, 50))}*.\n\nTry a different search term.`,
         { parse_mode: 'Markdown' }
       );
     }
 
-    const title = data.title || sanitized;
+    // Step 2: Get the summary of the best match
+    const pageTitle = results[0].title;
+    const summaryRes = await axios.get(
+      `${WIKI_API}/page/summary/${encodeURIComponent(pageTitle)}`,
+      { timeout: 8000, headers: { 'User-Agent': USER_AGENT } }
+    );
+
+    const data = summaryRes.data;
+    if (!data || !data.extract) {
+      return ctx.reply(
+        `📚 Found *${escapeM(truncate(pageTitle, 50))}* but no summary available.\n\n🔗 [Read on Wikipedia](https://en.wikipedia.org/wiki/${encodeURIComponent(pageTitle)})`,
+        { parse_mode: 'Markdown', disable_web_page_preview: true }
+      );
+    }
+
+    const title = data.title || pageTitle;
     const summary = data.extract || '';
-    const url = data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(sanitized)}`;
+    const url = data.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(pageTitle)}`;
     const thumbnail = data.thumbnail?.source;
 
     let reply = `📚 *${escapeM(title)}*\n\n${escapeM(truncate(summary, 2500))}`;
     reply += `\n\n🔗 [Read on Wikipedia](${url})`;
 
-    // Telegram max message length
     if (reply.length > 4000) {
       reply = reply.slice(0, 3990) + '...';
     }
@@ -56,17 +73,7 @@ async function wiki(ctx) {
     }
   } catch (err) {
     console.error('[Wiki] Error:', err.message);
-    if (err.response?.status === 404) {
-      await ctx.reply(
-        `📚 No article found for *${escapeM(truncate(sanitized, 50))}*.\n\nTry different keywords or check spelling.`,
-        { parse_mode: 'Markdown' }
-      );
-    } else {
-      await ctx.reply(
-        `🔗 Search Wikipedia directly: [${escapeM(truncate(sanitized, 30))}](https://en.wikipedia.org/wiki/Special:Search/${encodeURIComponent(sanitized)})`,
-        { parse_mode: 'Markdown' }
-      );
-    }
+    await ctx.reply('❌ Wikipedia is temporarily unavailable. Please try again later.');
   }
 }
 
