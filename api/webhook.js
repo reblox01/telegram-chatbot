@@ -623,7 +623,7 @@ bot.on('text', async (ctx) => {
   try {
     const reply = await chat(ctx.from.id, msg, memory, isPremium, premium);
     await premium.incrementUsage(ctx.from.id, 'message');
-    await ctx.reply(reply);
+    await ctx.reply(reply, { parse_mode: 'Markdown' });
   } catch (e) {
     console.error('[Bot] Chat error:', e.message);
     await ctx.reply('❌ Error: ' + e.message.substring(0, 200));
