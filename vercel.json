@@ -5,6 +5,7 @@
     { "src": "api/admin.js", "use": "@vercel/node", "config": { "maxDuration": 30 } }
   ],
   "routes": [
+    { "src": "/admin/api", "dest": "/api/admin.js" },
     { "src": "/admin", "dest": "/api/admin.js" },
     { "src": "/api/webhook", "dest": "/api/webhook.js" }
   ]

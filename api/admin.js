@@ -1,710 +1,615 @@
-const https = require('https');
+const supabase = require('../src/memory')._supabase || null;
 
+// ── Auth: Telegram Login Widget ──
+async function telegramLoginAuth(req) {
+  const botToken = process.env.BOT_TOKEN;
+  if (!botToken) return null;
+
+  // Check cookie first
+  const cookies = req.headers.cookie || '';
+  const sessionMatch = cookies.match(/admin_session=([^;]+)/);
+  if (sessionMatch) {
+    try {
+      const session = JSON.parse(Buffer.from(sessionMatch[1], 'base64').toString());
+      if (session.exp > Date.now() && String(session.id) === String(process.env.ADMIN_USER_ID)) {
+        return session;
+      }
+    } catch {}
+  }
+
+  // Check Telegram Login Widget callback
+  const hash = req.query?.hash;
+  if (!hash) return null;
+
+  const crypto = require('crypto');
+  const params = { ...req.query };
+  delete params.hash;
+
+  const sorted = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join('\n');
+  const secretKey = crypto.createHash('sha256').update(botToken).digest();
+  const hmac = crypto.createHmac('sha256', secretKey).update(sorted).digest('hex');
+
+  if (hmac !== hash) return null;
+
+  // Check auth_date is recent (within 24h)
+  const authDate = parseInt(params.auth_date);
+  if (Date.now() / 1000 - authDate > 86400) return null;
+
+  // Verify this is the admin
+  if (String(params.id) !== String(process.env.ADMIN_USER_ID)) return null;
+
+  return {
+    id: params.id,
+    first_name: params.first_name,
+    username: params.username,
+    exp: Date.now() + 86400000, // 24h session
+  };
+}
+
+// ── Supabase helpers ──
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
 
-// ── Supabase helper ──
-function supabaseReq(method, path, body = null) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(`${SUPABASE_URL}/rest/v1${path}`);
-    const options = {
-      hostname: url.hostname,
-      path: url.pathname + url.search,
-      method,
-      headers: {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': method === 'POST' ? 'return=representation,resolution=merge-duplicates' : 'return=minimal',
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        if (res.statusCode >= 400) return reject(new Error(`Supabase ${res.statusCode}: ${data}`));
-        try { resolve(data ? JSON.parse(data) : null); } catch { resolve(data); }
-      });
-    });
-    req.on('error', reject);
-    if (body) req.write(JSON.stringify(body));
-    req.end();
-  });
+function supaHeaders() {
+  return {
+    'apikey': SUPABASE_KEY,
+    'Authorization': `Bearer ${SUPABASE_KEY}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'resolution=merge-duplicates',
+  };
 }
 
-// ── Auth check ──
-function isAdmin(req) {
-  const authHeader = req.headers.authorization || '';
-  const token = authHeader.replace('Bearer ', '');
-  // Accept admin user ID as token, or ADMIN_USER_ID from env
-  if (!ADMIN_USER_ID) return true; // no admin set = open (dev mode)
-  return token === ADMIN_USER_ID;
-}
-
-// ── API handlers ──
-async function handleAPI(req, res) {
-  if (!isAdmin(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
+async function supaQuery(table, params = '') {
+  if (!SUPABASE_URL) throw new Error('SUPABASE_URL not set');
+  const url = `${SUPABASE_URL}/rest/v1/${table}${params}`;
+  const res = await fetch(url, { headers: supaHeaders() });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Supabase ${res.status}: ${err}`);
   }
+  return res.json();
+}
 
-  const { method } = req;
-  const { action } = req.body || {};
+async function supaUpsert(table, data) {
+  if (!SUPABASE_URL) throw new Error('SUPABASE_URL not set');
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: supaHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Supabase ${res.status}: ${err}`);
+  }
+  return res.json();
+}
+
+async function supaDelete(table, params) {
+  if (!SUPABASE_URL) throw new Error('SUPABASE_URL not set');
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}${params}`, {
+    method: 'DELETE',
+    headers: supaHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Supabase ${res.status}: ${err}`);
+  }
+}
+
+// ── Dashboard HTML ──
+function dashboardHTML(user) {
+  const botName = process.env.BOT_NAME || 'AI Bot';
+  const botUsername = process.env.BOT_USERNAME || 'bot';
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${botName} Admin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+    .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 18px; color: #58a6ff; }
+    .header .user { font-size: 13px; color: #8b949e; }
+    .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
+    .card h3 { font-size: 13px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .card .value { font-size: 32px; font-weight: 700; color: #58a6ff; }
+    .card .value.green { color: #3fb950; }
+    .card .value.purple { color: #bc8cff; }
+    .card .value.orange { color: #f0883e; }
+    .section { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 24px; margin-bottom: 24px; }
+    .section h2 { font-size: 16px; color: #f0f6fc; margin-bottom: 16px; border-bottom: 1px solid #30363d; padding-bottom: 12px; }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; font-size: 13px; color: #8b949e; margin-bottom: 6px; }
+    .form-group input, .form-group select { width: 100%; padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; font-size: 14px; }
+    .form-group input:focus { outline: none; border-color: #58a6ff; }
+    .btn { padding: 8px 16px; border-radius: 6px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; cursor: pointer; font-size: 13px; transition: all 0.2s; }
+    .btn:hover { background: #30363d; }
+    .btn-primary { background: #238636; border-color: #238636; color: #fff; }
+    .btn-primary:hover { background: #2ea043; }
+    .btn-danger { background: #da3633; border-color: #da3633; color: #fff; }
+    .btn-danger:hover { background: #f85149; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .row > * { flex: 1; min-width: 140px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #21262d; font-size: 13px; }
+    th { color: #8b949e; font-weight: 600; }
+    .badge { padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+    .badge-premium { background: #bc8cff22; color: #bc8cff; }
+    .badge-free { background: #8b949e22; color: #8b949e; }
+    .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; font-size: 14px; z-index: 1000; animation: slideIn 0.3s; }
+    .toast-success { background: #238636; color: #fff; }
+    .toast-error { background: #da3633; color: #fff; }
+    @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .tabs { display: flex; gap: 4px; margin-bottom: 24px; }
+    .tab { padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #8b949e; background: transparent; border: none; }
+    .tab.active { background: #21262d; color: #f0f6fc; }
+    .tab:hover { background: #21262d; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .search-box { padding: 8px 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; font-size: 14px; width: 100%; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>⚡ ${botName} Admin</h1>
+    <div class="user">👤 ${user.first_name || 'Admin'} ${user.username ? '@' + user.username : ''}</div>
+  </div>
+
+  <div class="container">
+    <!-- Stats -->
+    <div class="grid" id="stats">
+      <div class="card"><h3>👥 Users Today</h3><div class="value" id="stat-users">-</div></div>
+      <div class="card"><h3>💬 Messages</h3><div class="value green" id="stat-messages">-</div></div>
+      <div class="card"><h3>🔍 Searches</h3><div class="value orange" id="stat-searches">-</div></div>
+      <div class="card"><h3>💎 Premium</h3><div class="value purple" id="stat-premium">-</div></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('config')">⚙️ Config</button>
+      <button class="tab" onclick="switchTab('users')">👥 Users</button>
+      <button class="tab" onclick="switchTab('premium')">💎 Premium</button>
+    </div>
+
+    <!-- Config Tab -->
+    <div class="tab-content active" id="tab-config">
+      <div class="section">
+        <h2>📊 Free Limits</h2>
+        <div class="row">
+          <div class="form-group">
+            <label>Messages / day</label>
+            <input type="number" id="cfg-free-msgs" min="-1">
+          </div>
+          <div class="form-group">
+            <label>Searches / day</label>
+            <input type="number" id="cfg-free-searches" min="-1">
+          </div>
+          <div class="form-group">
+            <label>Active reminders</label>
+            <input type="number" id="cfg-free-reminds" min="-1">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="saveConfig('free_limits')">💾 Save Free Limits</button>
+      </div>
+
+      <div class="section">
+        <h2>💎 Premium Limits</h2>
+        <div class="row">
+          <div class="form-group">
+            <label>Messages / day (-1 = unlimited)</label>
+            <input type="number" id="cfg-prem-msgs" min="-1">
+          </div>
+          <div class="form-group">
+            <label>Searches / day</label>
+            <input type="number" id="cfg-prem-searches" min="-1">
+          </div>
+          <div class="form-group">
+            <label>Active reminders</label>
+            <input type="number" id="cfg-prem-reminds" min="-1">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="saveConfig('premium_limits')">💾 Save Premium Limits</button>
+      </div>
+
+      <div class="section">
+        <h2>🤖 Models & Pricing</h2>
+        <div class="form-group">
+          <label>Free Model</label>
+          <input type="text" id="cfg-free-model">
+        </div>
+        <div class="form-group">
+          <label>Premium Models (comma-separated, first = primary)</label>
+          <input type="text" id="cfg-prem-models">
+        </div>
+        <div class="form-group">
+          <label>Premium Price (Telegram Stars)</label>
+          <input type="number" id="cfg-prem-price" min="1">
+        </div>
+        <button class="btn btn-primary" onclick="saveAllConfig()">💾 Save All Settings</button>
+      </div>
+    </div>
+
+    <!-- Users Tab -->
+    <div class="tab-content" id="tab-users">
+      <div class="section">
+        <h2>👥 Usage Today</h2>
+        <input type="text" class="search-box" placeholder="Search by chat ID..." oninput="filterUsers(this.value)">
+        <table>
+          <thead><tr><th>Chat ID</th><th>Messages</th><th>Searches</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="users-table"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Premium Tab -->
+    <div class="tab-content" id="tab-premium">
+      <div class="section">
+        <h2>💎 Premium Users</h2>
+        <div class="row" style="margin-bottom:16px">
+          <div class="form-group">
+            <label>Grant Premium to Chat ID</label>
+            <input type="text" id="grant-id" placeholder="e.g. 1861463350">
+          </div>
+          <div class="form-group">
+            <label>Duration (days)</label>
+            <input type="number" id="grant-days" value="30" min="1">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="grantPremium()">✨ Grant Premium</button>
+        <hr style="border-color:#30363d;margin:20px 0">
+        <table>
+          <thead><tr><th>Chat ID</th><th>Activated</th><th>Expires</th><th>Actions</th></tr></thead>
+          <tbody id="premium-table"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = '/admin/api';
+
+    async function api(action, data = {}) {
+      const res = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, ...data }),
+      });
+      return res.json();
+    }
+
+    function toast(msg, type = 'success') {
+      const t = document.createElement('div');
+      t.className = 'toast toast-' + type;
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 3000);
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      document.querySelector('.tab-content#tab-' + name).classList.add('active');
+      event.target.classList.add('active');
+      if (name === 'users') loadUsers();
+      if (name === 'premium') loadPremium();
+    }
+
+    // ── Load Stats ──
+    async function loadStats() {
+      const d = await api('stats');
+      if (!d.ok) return;
+      document.getElementById('stat-users').textContent = d.stats.users_today;
+      document.getElementById('stat-messages').textContent = d.stats.messages_today;
+      document.getElementById('stat-searches').textContent = d.stats.searches_today;
+      document.getElementById('stat-premium').textContent = d.stats.premium_count;
+    }
+
+    // ── Load Config ──
+    async function loadConfig() {
+      const d = await api('get_config');
+      if (!d.ok) return;
+      const c = d.config;
+      document.getElementById('cfg-free-msgs').value = c.free_limits?.messagesPerDay ?? 20;
+      document.getElementById('cfg-free-searches').value = c.free_limits?.searchesPerDay ?? 5;
+      document.getElementById('cfg-free-reminds').value = c.free_limits?.remindersActive ?? 3;
+      document.getElementById('cfg-prem-msgs').value = c.premium_limits?.messagesPerDay ?? -1;
+      document.getElementById('cfg-prem-searches').value = c.premium_limits?.searchesPerDay ?? -1;
+      document.getElementById('cfg-prem-reminds').value = c.premium_limits?.remindersActive ?? -1;
+      document.getElementById('cfg-free-model').value = c.free_model || 'stepfun/step-3.5-flash:free';
+      document.getElementById('cfg-prem-models').value = (c.premium_models || []).join(', ');
+      document.getElementById('cfg-prem-price').value = c.premium_price || 100;
+    }
+
+    // ── Save Config ──
+    async function saveConfig(key) {
+      let value;
+      if (key === 'free_limits') {
+        value = {
+          messagesPerDay: parseInt(document.getElementById('cfg-free-msgs').value),
+          searchesPerDay: parseInt(document.getElementById('cfg-free-searches').value),
+          remindersActive: parseInt(document.getElementById('cfg-free-reminds').value),
+        };
+      } else if (key === 'premium_limits') {
+        value = {
+          messagesPerDay: parseInt(document.getElementById('cfg-prem-msgs').value),
+          searchesPerDay: parseInt(document.getElementById('cfg-prem-searches').value),
+          remindersActive: parseInt(document.getElementById('cfg-prem-reminds').value),
+        };
+      }
+      const d = await api('set_config', { key, value });
+      toast(d.ok ? 'Saved!' : d.error, d.ok ? 'success' : 'error');
+    }
+
+    async function saveAllConfig() {
+      const configs = [
+        { key: 'free_limits', value: {
+          messagesPerDay: parseInt(document.getElementById('cfg-free-msgs').value),
+          searchesPerDay: parseInt(document.getElementById('cfg-free-searches').value),
+          remindersActive: parseInt(document.getElementById('cfg-free-reminds').value),
+        }},
+        { key: 'premium_limits', value: {
+          messagesPerDay: parseInt(document.getElementById('cfg-prem-msgs').value),
+          searchesPerDay: parseInt(document.getElementById('cfg-prem-searches').value),
+          remindersActive: parseInt(document.getElementById('cfg-prem-reminds').value),
+        }},
+        { key: 'free_model', value: document.getElementById('cfg-free-model').value },
+        { key: 'premium_models', value: document.getElementById('cfg-prem-models').value.split(',').map(s => s.trim()).filter(Boolean) },
+        { key: 'premium_price', value: parseInt(document.getElementById('cfg-prem-price').value) },
+      ];
+      for (const c of configs) {
+        const d = await api('set_config', c);
+        if (!d.ok) { toast(d.error, 'error'); return; }
+      }
+      toast('All settings saved!');
+    }
+
+    // ── Users ──
+    let allUsers = [];
+    async function loadUsers() {
+      const d = await api('get_users');
+      if (!d.ok) return;
+      allUsers = d.users;
+      renderUsers(allUsers);
+    }
+
+    function filterUsers(q) {
+      renderUsers(allUsers.filter(u => u.chat_id.includes(q)));
+    }
+
+    function renderUsers(users) {
+      const tbody = document.getElementById('users-table');
+      tbody.innerHTML = users.map(u =>
+        '<tr><td>' + u.chat_id + '</td><td>' + u.message_count + '</td><td>' + u.search_count +
+        '</td><td>' + (u.is_premium ? '<span class="badge badge-premium">Premium</span>' : '<span class="badge badge-free">Free</span>') +
+        '</td><td><button class="btn" onclick="resetUsage(\\'' + u.chat_id + '\\')">Reset</button></td></tr>'
+      ).join('') || '<tr><td colspan="5" style="text-align:center;color:#8b949e">No users yet</td></tr>';
+    }
+
+    async function resetUsage(chatId) {
+      if (!confirm('Reset usage for ' + chatId + '?')) return;
+      const d = await api('reset_usage', { chat_id: chatId });
+      toast(d.ok ? 'Reset!' : d.error, d.ok ? 'success' : 'error');
+      if (d.ok) loadUsers();
+    }
+
+    // ── Premium ──
+    let allPremium = [];
+    async function loadPremium() {
+      const d = await api('get_premium_users');
+      if (!d.ok) return;
+      allPremium = d.users;
+      const tbody = document.getElementById('premium-table');
+      tbody.innerHTML = allPremium.map(u =>
+        '<tr><td>' + u.chat_id + '</td><td>' + new Date(u.activated_at).toLocaleDateString() +
+        '</td><td>' + (u.expires_at ? new Date(u.expires_at).toLocaleDateString() : 'Never') +
+        '</td><td><button class="btn btn-danger" onclick="revokePremium(\\'' + u.chat_id + '\\')">Revoke</button></td></tr>'
+      ).join('') || '<tr><td colspan="4" style="text-align:center;color:#8b949e">No premium users</td></tr>';
+    }
+
+    async function grantPremium() {
+      const chatId = document.getElementById('grant-id').value.trim();
+      const days = parseInt(document.getElementById('grant-days').value) || 30;
+      if (!chatId) return toast('Enter a chat ID', 'error');
+      const d = await api('grant_premium', { chat_id: chatId, days });
+      toast(d.ok ? 'Premium granted!' : d.error, d.ok ? 'success' : 'error');
+      if (d.ok) { loadPremium(); loadStats(); }
+    }
+
+    async function revokePremium(chatId) {
+      if (!confirm('Revoke premium for ' + chatId + '?')) return;
+      const d = await api('revoke_premium', { chat_id: chatId });
+      toast(d.ok ? 'Revoked!' : d.error, d.ok ? 'success' : 'error');
+      if (d.ok) { loadPremium(); loadStats(); }
+    }
+
+    // ── Init ──
+    loadStats();
+    loadConfig();
+    setInterval(loadStats, 30000);
+  </script>
+</body>
+</html>`;
+}
+
+// ── Telegram Login Page ──
+function loginPageHTML(botUsername) {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Login</title>
+  <style>
+    body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .login-box { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 40px; text-align: center; max-width: 400px; }
+    .login-box h1 { font-size: 24px; color: #58a6ff; margin-bottom: 8px; }
+    .login-box p { color: #8b949e; margin-bottom: 24px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="login-box">
+    <h1>⚡ Admin Login</h1>
+    <p>Sign in with your Telegram account to access the dashboard.</p>
+    <script async src="https://telegram.org/js/telegram-widget.js?22"
+      data-telegram-login="${botUsername}"
+      data-size="large"
+      data-onauth="onTelegramAuth(user)"
+      data-request-access="write">
+    </script>
+    <script>
+      function onTelegramAuth(user) {
+        // Redirect with Telegram login params — server validates hash
+        const params = new URLSearchParams(user);
+        window.location.href = '/admin?' + params.toString();
+      }
+    </script>
+  </div>
+</body>
+</html>`;
+}
+
+// ── API Handler ──
+async function handleAPI(req, res) {
+  const body = req.body;
+  const action = body?.action;
 
   try {
-    // GET config
-    if (method === 'POST' && action === 'getConfig') {
-      const keys = ['free_limits', 'premium_limits', 'premium_price', 'free_model', 'premium_models'];
-      const config = {};
-      for (const key of keys) {
-        try {
-          const rows = await supabaseReq('GET', `/bot_config?key=eq.${key}&select=value`);
-          if (rows && rows.length > 0) config[key] = rows[0].value;
-        } catch (e) {
-          console.error(`Config get ${key}:`, e.message);
-        }
+    switch (action) {
+      case 'stats': {
+        const today = new Date().toISOString().split('T')[0];
+        const usage = await supaQuery('bot_usage', `?date=eq.${today}`);
+        const premium = await supaQuery('bot_premium', '?is_premium=eq.true');
+        res.json({
+          ok: true,
+          stats: {
+            users_today: usage.length,
+            messages_today: usage.reduce((s, u) => s + (u.message_count || 0), 0),
+            searches_today: usage.reduce((s, u) => s + (u.search_count || 0), 0),
+            premium_count: premium.length,
+          }
+        });
+        break;
       }
-      return res.json({ ok: true, config });
-    }
 
-    // SET config
-    if (method === 'POST' && action === 'setConfig') {
-      const { key, value } = req.body;
-      if (!key) return res.status(400).json({ error: 'Missing key' });
-
-      await supabaseReq('POST', `/bot_config?on_conflict=key`, {
-        key,
-        value,
-        updated_at: new Date().toISOString(),
-      });
-      return res.json({ ok: true });
-    }
-
-    // GET stats
-    if (method === 'POST' && action === 'getStats') {
-      const today = new Date().toISOString().split('T')[0];
-
-      // Count total users today
-      const usageRows = await supabaseReq('GET',
-        `/bot_usage?date=eq.${today}&select=chat_id,message_count,search_count`);
-
-      // Count premium users
-      const premiumRows = await supabaseReq('GET',
-        `/bot_premium?is_premium=eq.true&select=chat_id,expires_at`);
-
-      const activePremium = premiumRows ? premiumRows.filter(p =>
-        !p.expires_at || new Date(p.expires_at) > new Date()
-      ).length : 0;
-
-      const totalUsersToday = usageRows ? usageRows.length : 0;
-      const totalMessages = usageRows ? usageRows.reduce((s, r) => s + (r.message_count || 0), 0) : 0;
-      const totalSearches = usageRows ? usageRows.reduce((s, r) => s + (r.search_count || 0), 0) : 0;
-
-      return res.json({
-        ok: true,
-        stats: {
-          usersToday: totalUsersToday,
-          messagesToday: totalMessages,
-          searchesToday: totalSearches,
-          premiumUsers: activePremium,
-          date: today,
+      case 'get_config': {
+        const configs = await supaQuery('bot_config');
+        const config = {};
+        for (const c of configs) {
+          config[c.key] = c.value;
         }
-      });
+        res.json({ ok: true, config });
+        break;
+      }
+
+      case 'set_config': {
+        const { key, value } = body;
+        if (!key) return res.json({ ok: false, error: 'Missing key' });
+        await supaUpsert('bot_config', { key, value, updated_at: new Date().toISOString() });
+        res.json({ ok: true });
+        break;
+      }
+
+      case 'get_users': {
+        const today = new Date().toISOString().split('T')[0];
+        const usage = await supaQuery('bot_usage', `?date=eq.${today}&order=chat_id`);
+        const premium = await supaQuery('bot_premium');
+        const premMap = {};
+        premium.forEach(p => premMap[p.chat_id] = p);
+        const users = usage.map(u => ({
+          ...u,
+          is_premium: !!premMap[u.chat_id]?.is_premium,
+        }));
+        res.json({ ok: true, users });
+        break;
+      }
+
+      case 'reset_usage': {
+        const today = new Date().toISOString().split('T')[0];
+        await supaDelete('bot_usage', `?chat_id=eq.${body.chat_id}&date=eq.${today}`);
+        res.json({ ok: true });
+        break;
+      }
+
+      case 'grant_premium': {
+        const { chat_id, days } = body;
+        if (!chat_id) return res.json({ ok: false, error: 'Missing chat_id' });
+        const expires = new Date(Date.now() + (days || 30) * 86400000).toISOString();
+        await supaUpsert('bot_premium', {
+          chat_id: String(chat_id),
+          is_premium: true,
+          activated_at: new Date().toISOString(),
+          expires_at: expires,
+          updated_at: new Date().toISOString(),
+        });
+        res.json({ ok: true });
+        break;
+      }
+
+      case 'revoke_premium': {
+        await supaUpsert('bot_premium', {
+          chat_id: String(body.chat_id),
+          is_premium: false,
+          updated_at: new Date().toISOString(),
+        });
+        res.json({ ok: true });
+        break;
+      }
+
+      case 'get_premium_users': {
+        const users = await supaQuery('bot_premium', '?is_premium=eq.true&order=activated_at.desc');
+        res.json({ ok: true, users });
+        break;
+      }
+
+      default:
+        res.json({ ok: false, error: 'Unknown action' });
     }
-
-    // SET premium for user
-    if (method === 'POST' && action === 'setPremium') {
-      const { chatId, isPremium, days } = req.body;
-      if (!chatId) return res.status(400).json({ error: 'Missing chatId' });
-
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + (days || 30));
-
-      await supabaseReq('POST', `/bot_premium?on_conflict=chat_id`, {
-        chat_id: String(chatId),
-        is_premium: isPremium !== false,
-        is_premium: isPremium !== false,
-        activated_at: new Date().toISOString(),
-        expires_at: isPremium !== false ? expiresAt.toISOString() : null,
-        updated_at: new Date().toISOString(),
-      });
-      return res.json({ ok: true });
-    }
-
-    // RESET usage for user
-    if (method === 'POST' && action === 'resetUsage') {
-      const { chatId } = req.body;
-      if (!chatId) return res.status(400).json({ error: 'Missing chatId' });
-      const today = new Date().toISOString().split('T')[0];
-
-      await supabaseReq('POST', `/bot_usage?on_conflict=chat_id,date`, {
-        chat_id: String(chatId),
-        date: today,
-        message_count: 0,
-        search_count: 0,
-        remind_count: 0,
-        updated_at: new Date().toISOString(),
-      });
-      return res.json({ ok: true });
-    }
-
-    // GET premium users list
-    if (method === 'POST' && action === 'getPremiumUsers') {
-      const rows = await supabaseReq('GET',
-        `/bot_premium?select=chat_id,is_premium,activated_at,expires_at&order=activated_at.desc&limit=50`);
-      return res.json({ ok: true, users: rows || [] });
-    }
-
-    return res.status(400).json({ error: 'Unknown action' });
   } catch (err) {
-    console.error('[Admin] Error:', err.message);
-    return res.status(500).json({ error: err.message });
+    console.error('[Admin API]', err.message);
+    res.json({ ok: false, error: err.message });
   }
 }
 
-// ── Main handler ──
+// ── Main Handler ──
 module.exports = async (req, res) => {
-  // API calls
+  const botUsername = process.env.BOT_USERNAME || 'bot';
+
+  // Handle API calls
   if (req.method === 'POST') {
+    // Check auth via cookie
+    const user = await telegramLoginAuth(req);
+    if (!user) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
     return handleAPI(req, res);
   }
 
-  // Serve admin HTML
-  if (req.method === 'GET') {
-    res.setHeader('Content-Type', 'text/html');
-    return res.send(ADMIN_HTML);
+  // Handle Telegram Login Widget callback
+  if (req.query?.hash) {
+    const user = await telegramLoginAuth(req);
+    if (user) {
+      const session = Buffer.from(JSON.stringify(user)).toString('base64');
+      res.writeHead(302, {
+        'Location': '/admin',
+        'Set-Cookie': `admin_session=${session}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`,
+      });
+      return res.end();
+    }
   }
 
-  res.status(405).json({ error: 'Method not allowed' });
+  // Check if already authenticated
+  const user = await telegramLoginAuth(req);
+  if (user) {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    return res.end(dashboardHTML(user));
+  }
+
+  // Show login page
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(loginPageHTML(botUsername));
 };
-
-// ── Admin HTML ──
-const ADMIN_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🤖 Bot Admin Dashboard</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0a0a0f;
-    color: #e0e0e0;
-    min-height: 100vh;
-  }
-  .header {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-    padding: 24px 32px;
-    border-bottom: 1px solid #2a2a4a;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .header h1 { font-size: 24px; color: #fff; }
-  .header h1 span { color: #7c3aed; }
-  .auth-bar {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-  }
-  .auth-bar input {
-    background: #1a1a2e;
-    border: 1px solid #3a3a5a;
-    color: #fff;
-    padding: 8px 16px;
-    border-radius: 8px;
-    font-size: 14px;
-    width: 200px;
-  }
-  .auth-bar button {
-    background: #7c3aed;
-    color: #fff;
-    border: none;
-    padding: 8px 20px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .auth-bar button:hover { background: #6d28d9; }
-  .auth-bar .status {
-    font-size: 12px;
-    color: #888;
-    margin-left: 8px;
-  }
-  .auth-bar .status.connected { color: #22c55e; }
-
-  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
-
-  /* Stats Cards */
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 16px;
-    margin-bottom: 32px;
-  }
-  .stat-card {
-    background: linear-gradient(135deg, #1a1a2e 0%, #1e1e3a 100%);
-    border: 1px solid #2a2a4a;
-    border-radius: 12px;
-    padding: 20px;
-    text-align: center;
-  }
-  .stat-card .value {
-    font-size: 32px;
-    font-weight: 700;
-    color: #7c3aed;
-    margin-bottom: 4px;
-  }
-  .stat-card .label {
-    font-size: 13px;
-    color: #888;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-
-  /* Cards */
-  .card {
-    background: linear-gradient(135deg, #1a1a2e 0%, #1e1e3a 100%);
-    border: 1px solid #2a2a4a;
-    border-radius: 12px;
-    padding: 24px;
-    margin-bottom: 24px;
-  }
-  .card h2 {
-    font-size: 18px;
-    margin-bottom: 20px;
-    color: #fff;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .card h2 .badge {
-    font-size: 11px;
-    background: #7c3aed;
-    color: #fff;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-weight: 500;
-  }
-
-  /* Form */
-  .form-group {
-    margin-bottom: 16px;
-  }
-  .form-group label {
-    display: block;
-    font-size: 13px;
-    color: #aaa;
-    margin-bottom: 6px;
-    font-weight: 500;
-  }
-  .form-group .hint {
-    font-size: 11px;
-    color: #666;
-    margin-top: 2px;
-  }
-  .row {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 16px;
-  }
-  input[type="number"], input[type="text"], select {
-    width: 100%;
-    background: #0d0d1a;
-    border: 1px solid #3a3a5a;
-    color: #fff;
-    padding: 10px 14px;
-    border-radius: 8px;
-    font-size: 14px;
-    transition: border-color 0.2s;
-  }
-  input:focus, select:focus {
-    outline: none;
-    border-color: #7c3aed;
-  }
-  input[type="number"] { text-align: center; font-size: 18px; font-weight: 600; }
-
-  .btn {
-    background: #7c3aed;
-    color: #fff;
-    border: none;
-    padding: 10px 24px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 600;
-    transition: all 0.2s;
-  }
-  .btn:hover { background: #6d28d9; transform: translateY(-1px); }
-  .btn-green { background: #22c55e; }
-  .btn-green:hover { background: #16a34a; }
-  .btn-red { background: #ef4444; }
-  .btn-red:hover { background: #dc2626; }
-  .btn-sm { padding: 6px 14px; font-size: 12px; }
-
-  .toast {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: #22c55e;
-    color: #fff;
-    padding: 12px 24px;
-    border-radius: 8px;
-    font-weight: 600;
-    transform: translateX(120%);
-    transition: transform 0.3s;
-    z-index: 1000;
-  }
-  .toast.show { transform: translateX(0); }
-  .toast.error { background: #ef4444; }
-
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-  @media (max-width: 768px) { .grid-2 { grid-template-columns: 1fr; } }
-
-  .model-tag {
-    display: inline-block;
-    background: #1a1a2e;
-    border: 1px solid #3a3a5a;
-    padding: 4px 12px;
-    border-radius: 16px;
-    font-size: 12px;
-    margin: 4px;
-    color: #a78bfa;
-  }
-
-  .section-divider {
-    border: none;
-    border-top: 1px solid #2a2a4a;
-    margin: 24px 0;
-  }
-
-  .table-wrap { overflow-x: auto; }
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-  }
-  th, td {
-    padding: 10px 12px;
-    text-align: left;
-    border-bottom: 1px solid #2a2a4a;
-  }
-  th { color: #888; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 1px; }
-  td { color: #ccc; }
-  tr:hover td { background: rgba(124, 58, 237, 0.05); }
-</style>
-</head>
-<body>
-
-<div class="header">
-  <h1>🤖 Bot <span>Admin</span> Dashboard</h1>
-  <div class="auth-bar">
-    <input type="password" id="adminToken" placeholder="Admin User ID">
-    <button onclick="saveToken()">Connect</button>
-    <span class="status" id="authStatus">Not connected</span>
-  </div>
-</div>
-
-<div class="container">
-
-  <!-- Stats -->
-  <div class="stats" id="stats">
-    <div class="stat-card">
-      <div class="value" id="statUsers">--</div>
-      <div class="label">Users Today</div>
-    </div>
-    <div class="stat-card">
-      <div class="value" id="statMessages">--</div>
-      <div class="label">Messages Today</div>
-    </div>
-    <div class="stat-card">
-      <div class="value" id="statSearches">--</div>
-      <div class="label">Searches Today</div>
-    </div>
-    <div class="stat-card">
-      <div class="value" id="statPremium">--</div>
-      <div class="label">Premium Users</div>
-    </div>
-  </div>
-
-  <div class="grid-2">
-
-    <!-- Free Tier -->
-    <div class="card">
-      <h2>🆓 Free Tier Limits</h2>
-      <div class="form-group">
-        <label>Messages per day</label>
-        <input type="number" id="freeMessages" min="1" max="1000" value="20">
-        <div class="hint">Max messages a free user can send per day</div>
-      </div>
-      <div class="form-group">
-        <label>Searches per day</label>
-        <input type="number" id="freeSearches" min="0" max="100" value="5">
-        <div class="hint">Max search queries per day</div>
-      </div>
-      <div class="form-group">
-        <label>Active reminders</label>
-        <input type="number" id="freeReminders" min="0" max="50" value="3">
-        <div class="hint">Max active reminders at once</div>
-      </div>
-      <div class="form-group">
-        <label>AI Model</label>
-        <select id="freeModel">
-          <option value="stepfun/step-3.5-flash:free">Step 3.5 Flash (Free)</option>
-          <option value="arcee-ai/trinity-large-preview:free">Arcee Trinity (Free)</option>
-          <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
-          <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
-        </select>
-        <div class="hint">Model used for free tier users</div>
-      </div>
-      <button class="btn" onclick="saveFreeLimits()">💾 Save Free Limits</button>
-    </div>
-
-    <!-- Premium Tier -->
-    <div class="card">
-      <h2>💎 Premium Tier <span class="badge">PAID</span></h2>
-      <div class="form-group">
-        <label>Messages per day (-1 = unlimited)</label>
-        <input type="number" id="premiumMessages" min="-1" max="10000" value="-1">
-        <div class="hint">Set to -1 for unlimited</div>
-      </div>
-      <div class="form-group">
-        <label>Searches per day</label>
-        <input type="number" id="premiumSearches" min="-1" max="1000" value="-1">
-      </div>
-      <div class="form-group">
-        <label>Active reminders</label>
-        <input type="number" id="premiumReminders" min="-1" max="100" value="-1">
-      </div>
-      <div class="form-group">
-        <label>Premium Price (Telegram Stars)</label>
-        <input type="number" id="premiumPrice" min="1" max="10000" value="100">
-        <div class="hint">100 Stars ≈ $2. Price per month.</div>
-      </div>
-      <div class="form-group">
-        <label>AI Models (comma-separated)</label>
-        <input type="text" id="premiumModels" value="anthropic/claude-3.5-sonnet,openai/gpt-4o-mini">
-        <div class="hint">First = primary, rest = fallbacks</div>
-      </div>
-      <button class="btn btn-green" onclick="savePremiumLimits()">💾 Save Premium Settings</button>
-    </div>
-
-  </div>
-
-  <hr class="section-divider">
-
-  <!-- User Management -->
-  <div class="card">
-    <h2>👤 User Management</h2>
-    <div class="row" style="margin-bottom: 16px;">
-      <div class="form-group">
-        <label>User ID (Telegram)</label>
-        <input type="text" id="manageUserId" placeholder="e.g. 1861463350">
-      </div>
-      <div class="form-group">
-        <label>Premium Duration (days)</label>
-        <input type="number" id="premiumDays" value="30" min="1" max="365">
-      </div>
-    </div>
-    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-      <button class="btn btn-green" onclick="grantPremium()">✨ Grant Premium</button>
-      <button class="btn btn-red" onclick="revokePremium()">❌ Revoke Premium</button>
-      <button class="btn" onclick="resetUsage()">🔄 Reset Usage</button>
-    </div>
-  </div>
-
-  <!-- Premium Users List -->
-  <div class="card">
-    <h2>💎 Premium Users <button class="btn btn-sm" onclick="loadPremiumUsers()" style="margin-left: auto;">Refresh</button></h2>
-    <div class="table-wrap">
-      <table id="premiumTable">
-        <thead>
-          <tr><th>User ID</th><th>Activated</th><th>Expires</th><th>Actions</th></tr>
-        </thead>
-        <tbody id="premiumTableBody">
-          <tr><td colspan="4" style="color: #666;">Click Refresh to load</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-  let ADMIN_TOKEN = localStorage.getItem('adminToken') || '';
-
-  function saveToken() {
-    ADMIN_TOKEN = document.getElementById('adminToken').value;
-    localStorage.setItem('adminToken', ADMIN_TOKEN);
-    document.getElementById('authStatus').className = 'status connected';
-    document.getElementById('authStatus').textContent = '✓ Connected';
-    loadAll();
-  }
-
-  if (ADMIN_TOKEN) {
-    document.getElementById('adminToken').value = ADMIN_TOKEN;
-    document.getElementById('authStatus').className = 'status connected';
-    document.getElementById('authStatus').textContent = '✓ Connected';
-  }
-
-  async function api(action, data = {}) {
-    const res = await fetch('/admin', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + ADMIN_TOKEN,
-      },
-      body: JSON.stringify({ action, ...data }),
-    });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || 'API error');
-    return json;
-  }
-
-  function toast(msg, isError = false) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.className = 'toast show' + (isError ? ' error' : '');
-    setTimeout(() => el.className = 'toast', 3000);
-  }
-
-  async function loadConfig() {
-    try {
-      const { config } = await api('getConfig');
-      if (config.free_limits) {
-        document.getElementById('freeMessages').value = config.free_limits.messagesPerDay ?? 20;
-        document.getElementById('freeSearches').value = config.free_limits.searchesPerDay ?? 5;
-        document.getElementById('freeReminders').value = config.free_limits.remindersActive ?? 3;
-      }
-      if (config.premium_limits) {
-        document.getElementById('premiumMessages').value = config.premium_limits.messagesPerDay ?? -1;
-        document.getElementById('premiumSearches').value = config.premium_limits.searchesPerDay ?? -1;
-        document.getElementById('premiumReminders').value = config.premium_limits.remindersActive ?? -1;
-      }
-      if (config.premium_price !== undefined) {
-        document.getElementById('premiumPrice').value = config.premium_price;
-      }
-      if (config.free_model) {
-        document.getElementById('freeModel').value = config.free_model;
-      }
-      if (config.premium_models) {
-        document.getElementById('premiumModels').value = Array.isArray(config.premium_models)
-          ? config.premium_models.join(',') : config.premium_models;
-      }
-    } catch (e) {
-      toast('Failed to load config: ' + e.message, true);
-    }
-  }
-
-  async function loadStats() {
-    try {
-      const { stats } = await api('getStats');
-      document.getElementById('statUsers').textContent = stats.usersToday;
-      document.getElementById('statMessages').textContent = stats.messagesToday;
-      document.getElementById('statSearches').textContent = stats.searchesToday;
-      document.getElementById('statPremium').textContent = stats.premiumUsers;
-    } catch (e) {
-      console.error('Stats error:', e);
-    }
-  }
-
-  async function saveFreeLimits() {
-    try {
-      await api('setConfig', { key: 'free_limits', value: {
-        messagesPerDay: parseInt(document.getElementById('freeMessages').value),
-        searchesPerDay: parseInt(document.getElementById('freeSearches').value),
-        remindersActive: parseInt(document.getElementById('freeReminders').value),
-      }});
-      await api('setConfig', { key: 'free_model', value: document.getElementById('freeModel').value });
-      toast('✅ Free limits saved!');
-    } catch (e) { toast('Error: ' + e.message, true); }
-  }
-
-  async function savePremiumLimits() {
-    try {
-      await api('setConfig', { key: 'premium_limits', value: {
-        messagesPerDay: parseInt(document.getElementById('premiumMessages').value),
-        searchesPerDay: parseInt(document.getElementById('premiumSearches').value),
-        remindersActive: parseInt(document.getElementById('premiumReminders').value),
-      }});
-      await api('setConfig', { key: 'premium_price', value: parseInt(document.getElementById('premiumPrice').value) });
-      const models = document.getElementById('premiumModels').value.split(',').map(s => s.trim()).filter(Boolean);
-      await api('setConfig', { key: 'premium_models', value: models });
-      toast('✅ Premium settings saved!');
-    } catch (e) { toast('Error: ' + e.message, true); }
-  }
-
-  async function grantPremium() {
-    const userId = document.getElementById('manageUserId').value;
-    if (!userId) return toast('Enter a User ID', true);
-    try {
-      await api('setPremium', { chatId: userId, isPremium: true, days: parseInt(document.getElementById('premiumDays').value) });
-      toast('✅ Premium granted to ' + userId);
-      loadPremiumUsers();
-    } catch (e) { toast('Error: ' + e.message, true); }
-  }
-
-  async function revokePremium() {
-    const userId = document.getElementById('manageUserId').value;
-    if (!userId) return toast('Enter a User ID', true);
-    try {
-      await api('setPremium', { chatId: userId, isPremium: false });
-      toast('✅ Premium revoked for ' + userId);
-      loadPremiumUsers();
-    } catch (e) { toast('Error: ' + e.message, true); }
-  }
-
-  async function resetUsage() {
-    const userId = document.getElementById('manageUserId').value;
-    if (!userId) return toast('Enter a User ID', true);
-    try {
-      await api('resetUsage', { chatId: userId });
-      toast('✅ Usage reset for ' + userId);
-      loadStats();
-    } catch (e) { toast('Error: ' + e.message, true); }
-  }
-
-  async function loadPremiumUsers() {
-    try {
-      const { users } = await api('getPremiumUsers');
-      const tbody = document.getElementById('premiumTableBody');
-      if (!users || users.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:#666;">No premium users yet</td></tr>';
-        return;
-      }
-      tbody.innerHTML = users.map(u => {
-        const expired = u.expires_at && new Date(u.expires_at) < new Date();
-        const expDate = u.expires_at ? new Date(u.expires_at).toLocaleDateString() : 'Never';
-        return '<tr>' +
-          '<td style="font-weight:600;color:#a78bfa;">' + u.chat_id + '</td>' +
-          '<td>' + new Date(u.activated_at).toLocaleDateString() + '</td>' +
-          '<td style="color:' + (expired ? '#ef4444' : '#22c55e') + '">' + expDate + '</td>' +
-          '<td><button class="btn btn-red btn-sm" onclick="revokePremiumById(\\'' + u.chat_id + '\\')">Revoke</button></td>' +
-          '</tr>';
-      }).join('');
-    } catch (e) { toast('Error: ' + e.message, true); }
-  }
-
-  async function revokePremiumById(chatId) {
-    try {
-      await api('setPremium', { chatId, isPremium: false });
-      toast('✅ Premium revoked for ' + chatId);
-      loadPremiumUsers();
-    } catch (e) { toast('Error: ' + e.message, true); }
-  }
-
-  async function loadAll() {
-    await Promise.all([loadConfig(), loadStats(), loadPremiumUsers()]);
-  }
-
-  // Auto-load on page load
-  if (ADMIN_TOKEN) loadAll();
-</script>
-
-</body>
-</html>`;

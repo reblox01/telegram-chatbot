@@ -188,6 +188,171 @@ bot.on('successful_payment', async (ctx) => {
   }
 });
 
+// ── Admin Command ──
+const ADMIN_USER_ID = process.env.ADMIN_USER_ID;
+const SUPABASE_URL_ADMIN = process.env.SUPABASE_URL;
+const SUPABASE_KEY_ADMIN = process.env.SUPABASE_KEY;
+
+function isAdmin(userId) {
+  return ADMIN_USER_ID && String(userId) === String(ADMIN_USER_ID);
+}
+
+async function supaFetch(table, params = '') {
+  if (!SUPABASE_URL_ADMIN) throw new Error('SUPABASE_URL not set');
+  const res = await fetch(`${SUPABASE_URL_ADMIN}/rest/v1/${table}${params}`, {
+    headers: {
+      'apikey': SUPABASE_KEY_ADMIN,
+      'Authorization': `Bearer ${SUPABASE_KEY_ADMIN}`,
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function supaUpsert(table, data) {
+  if (!SUPABASE_URL_ADMIN) throw new Error('SUPABASE_URL not set');
+  const res = await fetch(`${SUPABASE_URL_ADMIN}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      'apikey': SUPABASE_KEY_ADMIN,
+      'Authorization': `Bearer ${SUPABASE_KEY_ADMIN}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+}
+
+bot.command('admin', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) {
+    return ctx.reply('🔒 Admin only.');
+  }
+
+  const today = new Date().toISOString().split('T')[0];
+  const usage = await supaFetch('bot_usage', `?date=eq.${today}`).catch(() => []);
+  const premiumUsers = await supaFetch('bot_premium', '?is_premium=eq.true').catch(() => []);
+  const config = await premium.getAllConfig().catch(() => ({}));
+
+  await ctx.reply(
+    `⚡ *${BOT_NAME} Admin Panel*\n\n` +
+    `📊 *Today's Stats:*\n` +
+    `👥 Active users: ${usage.length}\n` +
+    `💬 Messages: ${usage.reduce((s, u) => s + (u.message_count || 0), 0)}\n` +
+    `🔍 Searches: ${usage.reduce((s, u) => s + (u.search_count || 0), 0)}\n` +
+    `💎 Premium users: ${premiumUsers.length}\n\n` +
+    `⚙️ *Current Config:*\n` +
+    `🆓 Free model: \`${config.free_model || 'step-3.5-flash:free'}\`\n` +
+    `💎 Premium model: \`${config.premium_models?.[0] || 'claude-3.5-sonnet'}\`\n` +
+    `💰 Premium price: ${config.premium_price || 100} ⭐\n` +
+    `📨 Free msg limit: ${config.free_limits?.messagesPerDay ?? 20}/day\n` +
+    `🔍 Free search limit: ${config.free_limits?.searchesPerDay ?? 5}/day`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📊 Refresh Stats', callback_data: 'admin_refresh' }],
+          [{ text: '💎 Grant Premium', callback_data: 'admin_grant' }, { text: '🔒 Revoke', callback_data: 'admin_revoke' }],
+          [{ text: '🌐 Web Dashboard', url: `https://${process.env.VERCEL_URL || 'localhost'}/admin` }],
+        ],
+      },
+    }
+  );
+});
+
+// ── Admin Callback Handlers ──
+bot.on('callback_query', async (ctx) => {
+  const data = ctx.callbackQuery.data;
+  const userId = ctx.from.id;
+
+  if (!isAdmin(userId)) {
+    return ctx.answerCbQuery('🔒 Admin only.');
+  }
+
+  if (data === 'admin_refresh') {
+    const today = new Date().toISOString().split('T')[0];
+    const usage = await supaFetch('bot_usage', `?date=eq.${today}`).catch(() => []);
+    const premiumUsers = await supaFetch('bot_premium', '?is_premium=eq.true').catch(() => []);
+
+    await ctx.editMessageText(
+      `⚡ *${BOT_NAME} Admin Panel*\n\n` +
+      `📊 *Today's Stats:*\n` +
+      `👥 Active users: ${usage.length}\n` +
+      `💬 Messages: ${usage.reduce((s, u) => s + (u.message_count || 0), 0)}\n` +
+      `🔍 Searches: ${usage.reduce((s, u) => s + (u.search_count || 0), 0)}\n` +
+      `💎 Premium users: ${premiumUsers.length}\n\n` +
+      `_Last updated: ${new Date().toLocaleTimeString()}_`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📊 Refresh Stats', callback_data: 'admin_refresh' }],
+            [{ text: '💎 Grant Premium', callback_data: 'admin_grant' }, { text: '🔒 Revoke', callback_data: 'admin_revoke' }],
+            [{ text: '🌐 Web Dashboard', url: `https://${process.env.VERCEL_URL || 'localhost'}/admin` }],
+          ],
+        },
+      }
+    );
+    return ctx.answerCbQuery('✅ Refreshed!');
+  }
+
+  if (data === 'admin_grant') {
+    await ctx.answerCbQuery();
+    return ctx.reply('💎 Send the chat ID to grant premium:\nFormat: `/grant <chat_id> <days>`\nExample: `/grant 123456789 30`', { parse_mode: 'Markdown' });
+  }
+
+  if (data === 'admin_revoke') {
+    await ctx.answerCbQuery();
+    return ctx.reply('🔒 Send the chat ID to revoke premium:\nFormat: `/revoke <chat_id>`\nExample: `/revoke 123456789`');
+  }
+});
+
+// ── Admin Grant/Revoke Commands ──
+bot.command('grant', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.reply('🔒 Admin only.');
+
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  if (args.length < 1) return ctx.reply('Usage: `/grant <chat_id> [days]`\nExample: `/grant 123456789 30`', { parse_mode: 'Markdown' });
+
+  const chatId = args[0];
+  const days = parseInt(args[1]) || 30;
+  const expires = new Date(Date.now() + days * 86400000).toISOString();
+
+  try {
+    await supaUpsert('bot_premium', {
+      chat_id: String(chatId),
+      is_premium: true,
+      activated_at: new Date().toISOString(),
+      expires_at: expires,
+      updated_at: new Date().toISOString(),
+    });
+    await ctx.reply(`✅ Premium granted to \`${chatId}\` for ${days} days.`, { parse_mode: 'Markdown' });
+  } catch (err) {
+    await ctx.reply('❌ Error: ' + err.message.substring(0, 200));
+  }
+});
+
+bot.command('revoke', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.reply('🔒 Admin only.');
+
+  const args = ctx.message.text.split(/\s+/).slice(1);
+  if (args.length < 1) return ctx.reply('Usage: `/revoke <chat_id>`', { parse_mode: 'Markdown' });
+
+  const chatId = args[0];
+
+  try {
+    await supaUpsert('bot_premium', {
+      chat_id: String(chatId),
+      is_premium: false,
+      updated_at: new Date().toISOString(),
+    });
+    await ctx.reply(`🔒 Premium revoked from \`${chatId}\`.`, { parse_mode: 'Markdown' });
+  } catch (err) {
+    await ctx.reply('❌ Error: ' + err.message.substring(0, 200));
+  }
+});
+
 // ── Commands with limits ──
 function commandOrPrompt(cmd, handler) {
   bot.command(cmd, async (ctx) => {
