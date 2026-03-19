@@ -4,8 +4,8 @@ if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
 }
 const { Telegraf } = require('telegraf');
 const Memory = require('./memory');
-const { chat, MODELS } = require('./chat');
-const { PremiumManager, PREMIUM_PRICE } = require('./premium');
+const { chat } = require('./chat');
+const { PremiumManager } = require('./premium');
 const { formatUptime, validateInput } = require('./utils');
 const { weather } = require('./commands/weather');
 const { search } = require('./commands/search');
@@ -96,10 +96,14 @@ bot.command('clear', async (ctx) => {
 
 bot.command('model', async (ctx) => {
   const isPremium = await premium.isPremium(ctx.from.id);
-  const model = isPremium ? 'Claude 3.5 Sonnet + 🧠 Thinking' : 'Step 3.5 Flash (Free)';
+  const config = await premium.getAllConfig();
+  const model = isPremium
+    ? (config.premium_models?.[0] || 'Claude 3.5 Sonnet')
+    : (config.free_model || 'Step 3.5 Flash');
+  const features = isPremium ? '+ 🧠 Thinking' : '(Free)';
   ctx.reply(
     `🧠 *${BOT_NAME}'s Brain*\n\n` +
-    `Model: ${model}\n` +
+    `Model: \`${model}\` ${features}\n` +
     `Status: ${isPremium ? '💎 Premium' : '🆓 Free'}`,
     { parse_mode: 'Markdown' }
   );
@@ -108,8 +112,11 @@ bot.command('model', async (ctx) => {
 bot.command('status', async (ctx) => {
   const msgCount = await memory.getMessageCount(ctx.from.id);
   const info = await premium.getPremiumInfo(ctx.from.id);
+  const config = await premium.getAllConfig();
   const status = info.isPremium ? '💎 Premium' : '🆓 Free';
-  const model = info.isPremium ? 'Claude 3.5 Sonnet + Thinking' : 'Step 3.5 Flash';
+  const model = info.isPremium
+    ? (config.premium_models?.[0] || 'Claude 3.5 Sonnet')
+    : (config.free_model || 'Step 3.5 Flash');
 
   let usageText = '';
   if (!info.isPremium) {
@@ -132,6 +139,7 @@ bot.command('status', async (ctx) => {
 // ── Premium Command ──
 bot.command('premium', async (ctx) => {
   const info = await premium.getPremiumInfo(ctx.from.id);
+  const config = await premium.getAllConfig();
 
   if (info.isPremium) {
     return ctx.reply(
@@ -144,20 +152,17 @@ bot.command('premium', async (ctx) => {
     );
   }
 
-  // Send invoice via Telegram Stars
   await ctx.replyWithInvoice({
     title: `${BOT_NAME} Premium ✨`,
     description: 'Unlock unlimited messages, Claude 3.5 Sonnet with thinking, and unlimited search & reminders for 30 days!',
     payload: `premium_${ctx.from.id}_${Date.now()}`,
-    currency: 'XTR', // Telegram Stars
-    prices: [{ label: 'Premium 30 days', amount: PREMIUM_PRICE }],
-    photo_url: 'https://i.imgur.com/placeholder.png', // optional
+    currency: 'XTR',
+    prices: [{ label: 'Premium 30 days', amount: config.premium_price }],
   });
 });
 
 // ── Telegram Stars Payment Handlers ──
 bot.on('pre_checkout_query', async (ctx) => {
-  // Always approve — validation happens on our end
   await ctx.answerPreCheckoutQuery(true);
 });
 
@@ -187,7 +192,6 @@ bot.on('successful_payment', async (ctx) => {
 
 bot.command('weather', weather);
 bot.command('search', async (ctx) => {
-  // Check search limit
   const canSearch = await premium.canUse(ctx.from.id, 'search');
   if (!canSearch.allowed) {
     return ctx.reply(
@@ -201,7 +205,6 @@ bot.command('search', async (ctx) => {
   return search(ctx);
 });
 bot.command('remind', async (ctx) => {
-  // Check remind limit
   const canRemind = await premium.canUse(ctx.from.id, 'remind');
   if (!canRemind.allowed) {
     return ctx.reply(
@@ -224,7 +227,6 @@ bot.on('text', async (ctx) => {
     return ctx.reply('⚠️ Message too long. Please keep it under 4000 characters.');
   }
 
-  // Check daily message limit
   const canChat = await premium.canUse(ctx.from.id, 'message');
   if (!canChat.allowed) {
     return ctx.reply(
@@ -238,11 +240,10 @@ bot.on('text', async (ctx) => {
     );
   }
 
-  // Check premium status for model selection
   const isPremium = await premium.isPremium(ctx.from.id);
 
   await ctx.replyWithChatAction('typing');
-  const reply = await chat(ctx.from.id, message, memory, isPremium);
+  const reply = await chat(ctx.from.id, message, memory, isPremium, premium);
   await premium.incrementUsage(ctx.from.id, 'message');
   await ctx.reply(reply);
 });

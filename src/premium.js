@@ -3,22 +3,23 @@ const https = require('https');
 // ── Config ──
 const USE_SUPABASE = !!(process.env.SUPABASE_URL && process.env.SUPABASE_KEY);
 
-// ── Limits ──
-const LIMITS = {
+// ── Default Limits ──
+const DEFAULT_LIMITS = {
   free: {
     messagesPerDay: 20,
     searchesPerDay: 5,
     remindersActive: 3,
   },
   premium: {
-    messagesPerDay: -1, // unlimited
+    messagesPerDay: -1,
     searchesPerDay: -1,
     remindersActive: -1,
   }
 };
 
-// ── Telegram Stars Price (in XTR) ──
-const PREMIUM_PRICE = 100; // 100 Telegram Stars (~$2)
+const DEFAULT_FREE_MODEL = 'stepfun/step-3.5-flash:free';
+const DEFAULT_PREMIUM_MODELS = ['anthropic/claude-3.5-sonnet', 'openai/gpt-4o-mini'];
+const DEFAULT_PREMIUM_PRICE = 100;
 
 // ── Supabase REST client ──
 class SupabaseClient {
@@ -68,8 +69,12 @@ class SupabaseClient {
 class PremiumManager {
   constructor() {
     this.supabase = null;
-    this.localUsage = {}; // fallback for no-Supabase
-    this.localPremium = {}; // fallback for no-Supabase
+    this.localUsage = {};
+    this.localPremium = {};
+    this.localConfig = {};
+    this.configCache = {};
+    this.configCacheTime = 0;
+    this.CACHE_TTL = 30000; // 30s cache
 
     if (USE_SUPABASE) {
       this.supabase = new SupabaseClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
@@ -79,12 +84,67 @@ class PremiumManager {
     }
   }
 
-  // Get today's date string
   today() {
     return new Date().toISOString().split('T')[0];
   }
 
-  // Check if user is premium
+  // ── Config Management ──
+  async getConfig(key, defaultVal) {
+    // Cache check
+    if (this.configCache[key] && Date.now() - this.configCacheTime < this.CACHE_TTL) {
+      return this.configCache[key];
+    }
+
+    if (this.supabase) {
+      try {
+        const rows = await this.supabase.request('GET',
+          `/bot_config?key=eq.${key}&select=value`);
+        if (rows && rows.length > 0) {
+          this.configCache[key] = rows[0].value;
+          this.configCacheTime = Date.now();
+          return rows[0].value;
+        }
+      } catch (err) {
+        console.error('[Premium] getConfig error:', err.message);
+      }
+    }
+
+    return this.localConfig[key] ?? defaultVal;
+  }
+
+  async setConfig(key, value) {
+    this.configCache[key] = value;
+    this.configCacheTime = Date.now();
+
+    if (this.supabase) {
+      try {
+        await this.supabase.request('POST', `/bot_config?on_conflict=key`, {
+          key,
+          value,
+          updated_at: new Date().toISOString(),
+        });
+        return true;
+      } catch (err) {
+        console.error('[Premium] setConfig error:', err.message);
+        return false;
+      }
+    }
+
+    this.localConfig[key] = value;
+    return true;
+  }
+
+  async getAllConfig() {
+    const config = {
+      free_limits: await this.getConfig('free_limits', DEFAULT_LIMITS.free),
+      premium_limits: await this.getConfig('premium_limits', DEFAULT_LIMITS.premium),
+      premium_price: await this.getConfig('premium_price', DEFAULT_PREMIUM_PRICE),
+      free_model: await this.getConfig('free_model', DEFAULT_FREE_MODEL),
+      premium_models: await this.getConfig('premium_models', DEFAULT_PREMIUM_MODELS),
+    };
+    return config;
+  }
+
   async isPremium(userId) {
     const key = String(userId);
 
@@ -108,7 +168,6 @@ class PremiumManager {
     return this.localPremium[key]?.is_premium || false;
   }
 
-  // Get today's usage for a user
   async getUsage(userId) {
     const key = String(userId);
     const today = this.today();
@@ -126,13 +185,10 @@ class PremiumManager {
     }
 
     const userUsage = this.localUsage[key];
-    if (userUsage && userUsage.date === today) {
-      return userUsage;
-    }
+    if (userUsage && userUsage.date === today) return userUsage;
     return { message_count: 0, search_count: 0, remind_count: 0 };
   }
 
-  // Increment usage counter
   async incrementUsage(userId, type = 'message') {
     const key = String(userId);
     const today = this.today();
@@ -146,7 +202,6 @@ class PremiumManager {
         else if (type === 'search') update.search_count = (current.search_count || 0) + 1;
         else if (type === 'remind') update.remind_count = (current.remind_count || 0) + 1;
 
-        // Also increment message count for non-message types
         if (type !== 'message') {
           update.message_count = (current.message_count || 0) + 1;
         }
@@ -166,10 +221,10 @@ class PremiumManager {
     }
   }
 
-  // Check if user can perform action (returns { allowed: bool, remaining: number })
   async canUse(userId, type = 'message') {
     const premium = await this.isPremium(userId);
-    const limits = premium ? LIMITS.premium : LIMITS.free;
+    const config = await this.getAllConfig();
+    const limits = premium ? config.premium_limits : config.free_limits;
     const usage = await this.getUsage(userId);
 
     let limit, current;
@@ -184,14 +239,12 @@ class PremiumManager {
       current = usage.remind_count || 0;
     }
 
-    // -1 means unlimited
     if (limit === -1) return { allowed: true, remaining: -1, premium: true };
 
     const remaining = Math.max(0, limit - current);
     return { allowed: remaining > 0, remaining, premium, limit, current };
   }
 
-  // Activate premium for a user
   async activatePremium(userId, durationDays = 30) {
     const key = String(userId);
     const expiresAt = new Date();
@@ -222,14 +275,14 @@ class PremiumManager {
     return true;
   }
 
-  // Get premium status info
   async getPremiumInfo(userId) {
-    const premium = await this.isPremium(userId);
+    const isPremium = await this.isPremium(userId);
+    const config = await this.getAllConfig();
     const usage = await this.getUsage(userId);
-    const limits = premium ? LIMITS.premium : LIMITS.free;
+    const limits = isPremium ? config.premium_limits : config.free_limits;
 
     return {
-      isPremium: premium,
+      isPremium,
       usage: {
         messages: usage.message_count || 0,
         searches: usage.search_count || 0,
@@ -244,4 +297,4 @@ class PremiumManager {
   }
 }
 
-module.exports = { PremiumManager, LIMITS, PREMIUM_PRICE };
+module.exports = { PremiumManager, DEFAULT_LIMITS, DEFAULT_PREMIUM_PRICE };

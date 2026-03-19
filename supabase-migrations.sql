@@ -27,3 +27,22 @@ CREATE TABLE IF NOT EXISTS bot_premium (
 
 ALTER TABLE bot_premium ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all" ON bot_premium FOR ALL USING (true) WITH CHECK (true);
+
+-- Bot configuration table (admin dashboard)
+CREATE TABLE IF NOT EXISTS bot_config (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE bot_config ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON bot_config FOR ALL USING (true) WITH CHECK (true);
+
+-- Default config values
+INSERT INTO bot_config (key, value) VALUES
+  ('free_limits', '{"messagesPerDay":20,"searchesPerDay":5,"remindersActive":3}'::jsonb),
+  ('premium_limits', '{"messagesPerDay":-1,"searchesPerDay":-1,"remindersActive":-1}'::jsonb),
+  ('premium_price', '100'::jsonb),
+  ('free_model', '"stepfun/step-3.5-flash:free"'::jsonb),
+  ('premium_models', '["anthropic/claude-3.5-sonnet","openai/gpt-4o-mini"]'::jsonb)
+ON CONFLICT (key) DO NOTHING;

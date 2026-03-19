@@ -1,7 +1,7 @@
 const { Telegraf } = require('telegraf');
 const Memory = require('../src/memory');
-const { chat, MODELS } = require('../src/chat');
-const { PremiumManager, PREMIUM_PRICE } = require('../src/premium');
+const { chat } = require('../src/chat');
+const { PremiumManager } = require('../src/premium');
 const { formatUptime, validateInput } = require('../src/utils');
 const { weather } = require('../src/commands/weather');
 const { search } = require('../src/commands/search');
@@ -94,10 +94,14 @@ bot.command('clear', async (ctx) => {
 
 bot.command('model', async (ctx) => {
   const isPremium = await premium.isPremium(ctx.from.id);
-  const model = isPremium ? 'Claude 3.5 Sonnet + 🧠 Thinking' : 'Step 3.5 Flash (Free)';
+  const config = await premium.getAllConfig();
+  const model = isPremium
+    ? (config.premium_models?.[0] || 'Claude 3.5 Sonnet')
+    : (config.free_model || 'Step 3.5 Flash');
+  const features = isPremium ? '+ 🧠 Thinking' : '(Free)';
   ctx.reply(
     `🧠 *${BOT_NAME}'s Brain*\n\n` +
-    `Model: ${model}\n` +
+    `Model: \`${model}\` ${features}\n` +
     `Status: ${isPremium ? '💎 Premium' : '🆓 Free'}`,
     { parse_mode: 'Markdown' }
   );
@@ -106,8 +110,11 @@ bot.command('model', async (ctx) => {
 bot.command('status', async (ctx) => {
   const msgCount = await memory.getMessageCount(ctx.from.id);
   const info = await premium.getPremiumInfo(ctx.from.id);
+  const config = await premium.getAllConfig();
   const status = info.isPremium ? '💎 Premium' : '🆓 Free';
-  const model = info.isPremium ? 'Claude 3.5 Sonnet + Thinking' : 'Step 3.5 Flash';
+  const model = info.isPremium
+    ? (config.premium_models?.[0] || 'Claude 3.5 Sonnet')
+    : (config.free_model || 'Step 3.5 Flash');
 
   let usageText = '';
   if (!info.isPremium) {
@@ -130,6 +137,7 @@ bot.command('status', async (ctx) => {
 // ── Premium Command ──
 bot.command('premium', async (ctx) => {
   const info = await premium.getPremiumInfo(ctx.from.id);
+  const config = await premium.getAllConfig();
 
   if (info.isPremium) {
     return ctx.reply(
@@ -147,7 +155,7 @@ bot.command('premium', async (ctx) => {
     description: 'Unlock unlimited messages, Claude 3.5 Sonnet with thinking, and unlimited search & reminders for 30 days!',
     payload: `premium_${ctx.from.id}_${Date.now()}`,
     currency: 'XTR',
-    prices: [{ label: 'Premium 30 days', amount: PREMIUM_PRICE }],
+    prices: [{ label: 'Premium 30 days', amount: config.premium_price }],
   });
 });
 
@@ -183,7 +191,6 @@ bot.on('successful_payment', async (ctx) => {
 // ── Commands with limits ──
 function commandOrPrompt(cmd, handler) {
   bot.command(cmd, async (ctx) => {
-    // Check limit for search/remind
     if (cmd === 'search') {
       const canSearch = await premium.canUse(ctx.from.id, 'search');
       if (!canSearch.allowed) {
@@ -218,43 +225,22 @@ function commandOrPrompt(cmd, handler) {
   });
 }
 
-commandOrPrompt('weather', {
-  prompt: '🌤 Which city? Type the city name:',
-  fn: weather,
-});
-
-commandOrPrompt('search', {
-  prompt: '🔍 What do you want to search for?',
-  fn: search,
-});
-
-commandOrPrompt('remind', {
-  prompt: '⏰ Set a reminder. Format: `5m call mom` or `2h check laundry`',
-  fn: remind,
-});
-
-commandOrPrompt('translate', {
-  prompt: '🌍 What to translate? Format: `fr hello` (language text)',
-  fn: translate,
-});
-
-commandOrPrompt('wiki', {
-  prompt: '📚 What do you want to look up on Wikipedia?',
-  fn: wiki,
-});
+commandOrPrompt('weather', { prompt: '🌤 Which city? Type the city name:', fn: weather });
+commandOrPrompt('search', { prompt: '🔍 What do you want to search for?', fn: search });
+commandOrPrompt('remind', { prompt: '⏰ Set a reminder. Format: `5m call mom` or `2h check laundry`', fn: remind });
+commandOrPrompt('translate', { prompt: '🌍 What to translate? Format: `fr hello` (language text)', fn: translate });
+commandOrPrompt('wiki', { prompt: '📚 What do you want to look up on Wikipedia?', fn: wiki });
 
 // ── Handle text (pending commands + chat) ──
 bot.on('text', async (ctx) => {
   const msg = ctx.message.text;
   if (!validateInput(msg, 4000)) return ctx.reply('⚠️ Message too long.');
 
-  // Check for pending command
   const pending = pendingCommands.get(ctx.from.id);
   if (pending && Date.now() - pending.ts < 60000) {
     pendingCommands.delete(ctx.from.id);
     const fakeCtx = { ...ctx, message: { ...ctx.message, text: `/${pending.command} ${msg}` } };
 
-    // Check limits for search/remind
     if (pending.command === 'search') {
       const canSearch = await premium.canUse(ctx.from.id, 'search');
       if (!canSearch.allowed) {
@@ -284,7 +270,6 @@ bot.on('text', async (ctx) => {
     if (handlers[pending.command]) return handlers[pending.command](fakeCtx);
   }
 
-  // Check daily message limit
   const canChat = await premium.canUse(ctx.from.id, 'message');
   if (!canChat.allowed) {
     return ctx.reply(
@@ -302,7 +287,7 @@ bot.on('text', async (ctx) => {
 
   await ctx.replyWithChatAction('typing');
   try {
-    const reply = await chat(ctx.from.id, msg, memory, isPremium);
+    const reply = await chat(ctx.from.id, msg, memory, isPremium, premium);
     await premium.incrementUsage(ctx.from.id, 'message');
     await ctx.reply(reply);
   } catch (e) {
@@ -314,10 +299,10 @@ bot.on('text', async (ctx) => {
 // ── Vercel serverless handler ──
 module.exports = async (req, res) => {
   if (req.method === 'GET') {
+    const config = await premium.getAllConfig().catch(() => ({}));
     res.status(200).json({
       status: 'ok',
       uptime: formatUptime(startTime),
-      model: MODELS.free[0].id,
       botName: BOT_NAME,
       premium: true,
       vercel: !!process.env.VERCEL,
