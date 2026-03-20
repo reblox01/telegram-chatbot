@@ -41,9 +41,9 @@ Format EVERY response with clear structure and visual hierarchy:
    - 🎯 **Bottom Line** — final takeaway
 
 3. **Formatting rules:**
-   - **Bold** for important terms
-   - *Italic* for emphasis
-   - \`code\` for commands, variables, or shortcode
+   - **Bold:** use `**text**` (exactly TWO asterisks, never four)
+   - *Italic:* use `*text*` (one asterisk)
+   - \`code:\` use backticks
    - Bullet points (•) for lists
    - Separate sections with a blank line
    - Keep paragraphs short (1-3 sentences max)
