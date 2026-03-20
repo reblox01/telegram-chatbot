@@ -230,9 +230,14 @@ bot.on('callback_query', async (ctx) => {
       await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
       return ctx.answerCbQuery('✅ Refreshed!');
     } catch (err) {
-      console.error('[Admin] Refresh error:', err.message);
-      await ctx.editMessageText('❌ Error refreshing. Check logs.', { parse_mode: 'Markdown' });
-      return ctx.answerCbQuery('❌ Error');
+      if (err.message && err.message.includes('message is not modified')) {
+        // Already up-to-date, ignore this harmless error
+        return ctx.answerCbQuery('✅ Already up-to-date!');
+      } else {
+        console.error('[Admin] Refresh error:', err.message);
+        await ctx.editMessageText('❌ Error refreshing. Check logs.', { parse_mode: 'Markdown' });
+        return ctx.answerCbQuery('❌ Error');
+      }
     }
   }
 

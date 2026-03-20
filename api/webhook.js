@@ -197,19 +197,6 @@ function isAdmin(userId) {
   return ADMIN_USER_ID && String(userId) === String(ADMIN_USER_ID);
 }
 
-async function supaFetch(table, params = '') {
-  if (!SUPABASE_URL_ADMIN) throw new Error('SUPABASE_URL not set');
-  const res = await fetch(`${SUPABASE_URL_ADMIN}/rest/v1/${table}${params}`, {
-    headers: {
-      'apikey': SUPABASE_KEY_ADMIN,
-      'Authorization': `Bearer ${SUPABASE_KEY_ADMIN}`,
-      'Content-Type': 'application/json',
-    },
-  });
-  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
-  return res.json();
-}
-
 async function supaUpsert(table, data) {
   if (!SUPABASE_URL_ADMIN) throw new Error('SUPABASE_URL not set');
   const res = await fetch(`${SUPABASE_URL_ADMIN}/rest/v1/${table}`, {
@@ -225,166 +212,38 @@ async function supaUpsert(table, data) {
   if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
 }
 
-// ── Admin panel builder ──
-async function buildAdminPanel() {
+// ── /admin command ──
+bot.command('admin', async (ctx) => {
+  if (!isAdmin(ctx.from.id)) return ctx.reply('🔒 Admin only.');
+
   const today = new Date().toISOString().split('T')[0];
-  const usage = await supaFetch('bot_usage', `?date=eq.${today}`).catch(() => []);
-  const premiumUsers = await supaFetch('bot_premium', '?is_premium=eq.true').catch(() => []);
+  const usage = await fetch(`${SUPABASE_URL_ADMIN}/rest/v1/bot_usage?date=eq.${today}`, {
+    headers: {
+      'apikey': SUPABASE_KEY_ADMIN,
+      'Authorization': `Bearer ${SUPABASE_KEY_ADMIN}`,
+    },
+  }).then(r => r.json()).catch(() => []);
+  const premiumUsers = await fetch(`${SUPABASE_URL_ADMIN}/rest/v1/bot_premium?is_premium=eq.true`, {
+    headers: {
+      'apikey': SUPABASE_KEY_ADMIN,
+      'Authorization': `Bearer ${SUPABASE_KEY_ADMIN}`,
+    },
+  }).then(r => r.json()).catch(() => []);
   const config = await premium.getAllConfig().catch(() => ({}));
 
-  const text =
+  await ctx.reply(
     `⚡ *${BOT_NAME} Admin Panel*\n\n` +
     `📊 *Today:*\n` +
     `👥 Users: ${usage.length} | 💬 Msgs: ${usage.reduce((s, u) => s + (u.message_count || 0), 0)} | 🔍 Searches: ${usage.reduce((s, u) => s + (u.search_count || 0), 0)} | 💎 Premium: ${premiumUsers.length}\n\n` +
     `⚙️ *Config:*\n` +
     `🆓 Free: \`${config.free_model || 'step-3.5-flash:free'}\` (${config.free_limits?.messagesPerDay ?? 20} msgs / ${config.free_limits?.searchesPerDay ?? 5} searches / ${config.free_limits?.remindersActive ?? 3} reminds)\n` +
     `💎 Premium: \`${(config.premium_models || ['claude-3.5-sonnet'])[0]}\` (unlimited)\n` +
-    `💰 Price: ${config.premium_price || 100} ⭐`;
-
-  const keyboard = [
-    [{ text: '📊 Refresh', callback_data: 'admin_refresh' }],
-    [{ text: '🤖 Free Model', callback_data: 'admin_set_free_model' }, { text: '💎 Premium Model', callback_data: 'admin_set_premium_model' }],
-    [{ text: '📨 Free Limits', callback_data: 'admin_set_free_limits' }, { text: '📨 Premium Limits', callback_data: 'admin_set_premium_limits' }],
-    [{ text: '💰 Premium Price', callback_data: 'admin_set_price' }],
-    [{ text: '✨ Grant Premium', callback_data: 'admin_grant' }, { text: '🔒 Revoke', callback_data: 'admin_revoke' }],
-    [{ text: '🌐 Web Dashboard', url: `https://${process.env.VERCEL_URL || 'localhost'}/admin` }],
-  ];
-
-  return { text, keyboard };
-}
-
-// ── /admin command ──
-bot.command('admin', async (ctx) => {
-  if (!isAdmin(ctx.from.id)) return ctx.reply('🔒 Admin only.');
-
-  const { text, keyboard } = await buildAdminPanel();
-  await ctx.reply(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
+    `💰 Price: ${config.premium_price || 100} ⭐`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
-// ── Admin Callback Handlers ──
-bot.on('callback_query', async (ctx) => {
-  const data = ctx.callbackQuery.data;
-  const userId = ctx.from.id;
-
-  if (!isAdmin(userId)) return ctx.answerCbQuery('🔒 Admin only.');
-
-  // ── Refresh ──
-  if (data === 'admin_refresh') {
-    try {
-      // Clear config cache to force fresh read
-      premium.configCache = {};
-      premium.configCacheTime = 0;
-      const { text, keyboard } = await buildAdminPanel();
-      await ctx.editMessageText(text, { parse_mode: 'Markdown', reply_markup: { inline_keyboard: keyboard } });
-      return ctx.answerCbQuery('✅ Refreshed!');
-    } catch (err) {
-      console.error('[Admin] Refresh error:', err.message);
-      await ctx.editMessageText('❌ Error refreshing. Check logs.', { parse_mode: 'Markdown' });
-      return ctx.answerCbQuery('❌ Error');
-    }
-  }
-
-  // ── Free Model ──
-  if (data === 'admin_set_free_model') {
-    const config = await premium.getAllConfig().catch(() => ({}));
-    pendingCommands.set(userId, { command: 'admin_set_free_model', ts: Date.now() });
-    await ctx.answerCbQuery();
-    return ctx.reply(
-      `🤖 *Set Free Model*\n\n` +
-      `Current: \`${config.free_model || 'step-3.5-flash:free'}\`\n\n` +
-      `Send the new model slug:\n` +
-      `Example: \`stepfun/step-3.5-flash:free\``,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // ── Premium Model ──
-  if (data === 'admin_set_premium_model') {
-    const config = await premium.getAllConfig().catch(() => ({}));
-    pendingCommands.set(userId, { command: 'admin_set_premium_model', ts: Date.now() });
-    await ctx.answerCbQuery();
-    return ctx.reply(
-      `💎 *Set Premium Model*\n\n` +
-      `Current: \`${(config.premium_models || []).join(', ')}\`\n\n` +
-      `Send the new model(s):\n` +
-      `Single: \`anthropic/claude-3.5-sonnet\`\n` +
-      `Multiple: \`anthropic/claude-3.5-sonnet, openai/gpt-4o-mini\``,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // ── Free Limits ──
-  if (data === 'admin_set_free_limits') {
-    const config = await premium.getAllConfig().catch(() => ({}));
-    const fl = config.free_limits || {};
-    pendingCommands.set(userId, { command: 'admin_set_free_limits', ts: Date.now() });
-    await ctx.answerCbQuery();
-    return ctx.reply(
-      `📨 *Set Free Limits*\n\n` +
-      `Current: ${fl.messagesPerDay ?? 20} msgs / ${fl.searchesPerDay ?? 5} searches / ${fl.remindersActive ?? 3} reminds\n\n` +
-      `Send as \`msgs searches reminds\`:\n` +
-      `Example: \`20 5 3\`\n` +
-      `Or \`-1 -1 -1\` for unlimited`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // ── Premium Limits ──
-  if (data === 'admin_set_premium_limits') {
-    const config = await premium.getAllConfig().catch(() => ({}));
-    const pl = config.premium_limits || {};
-    pendingCommands.set(userId, { command: 'admin_set_premium_limits', ts: Date.now() });
-    await ctx.answerCbQuery();
-    return ctx.reply(
-      `📨 *Set Premium Limits*\n\n` +
-      `Current: ${pl.messagesPerDay ?? -1} msgs / ${pl.searchesPerDay ?? -1} searches / ${pl.remindersActive ?? -1} reminds\n` +
-      `(-1 = unlimited)\n\n` +
-      `Send as \`msgs searches reminds\`:\n` +
-      `Example: \`-1 -1 -1\``,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // ── Premium Price ──
-  if (data === 'admin_set_price') {
-    const config = await premium.getAllConfig().catch(() => ({}));
-    pendingCommands.set(userId, { command: 'admin_set_price', ts: Date.now() });
-    await ctx.answerCbQuery();
-    return ctx.reply(
-      `💰 *Set Premium Price*\n\n` +
-      `Current: ${config.premium_price || 100} ⭐\n\n` +
-      `Send new price in Telegram Stars:\n` +
-      `Example: \`100\``,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // ── Grant Premium ──
-  if (data === 'admin_grant') {
-    pendingCommands.set(userId, { command: 'admin_grant', ts: Date.now() });
-    await ctx.answerCbQuery();
-    return ctx.reply(
-      `✨ *Grant Premium*\n\n` +
-      `Send as \`<chat_id> <days>\`:\n` +
-      `Example: \`1861463350 30\``,
-      { parse_mode: 'Markdown' }
-    );
-  }
-
-  // ── Revoke Premium ──
-  if (data === 'admin_revoke') {
-    pendingCommands.set(userId, { command: 'admin_revoke', ts: Date.now() });
-    await ctx.answerCbQuery();
-    return ctx.reply(
-      `🔒 *Revoke Premium*\n\n` +
-      `Send the chat ID:\n` +
-      `Example: \`1861463350\``,
-      { parse_mode: 'Markdown' }
-    );
-  }
-});
-
-// ── Admin Grant/Revoke Commands (direct /grant /revoke) ──
+// ── Admin Grant/Revoke Commands ──
 bot.command('grant', async (ctx) => {
   if (!isAdmin(ctx.from.id)) return ctx.reply('🔒 Admin only.');
 
@@ -470,107 +329,13 @@ commandOrPrompt('remind', { prompt: '⏰ Set a reminder. Format: `5m call mom` o
 commandOrPrompt('translate', { prompt: '🌍 What to translate? Format: `fr hello` (language text)', fn: translate });
 commandOrPrompt('wiki', { prompt: '📚 What do you want to look up on Wikipedia?', fn: wiki });
 
-// ── Handle text (pending admin + pending commands + chat) ──
+// ── Handle text (pending commands + chat) ──
 bot.on('text', async (ctx) => {
   const msg = ctx.message.text;
   if (!validateInput(msg, 4000)) return ctx.reply('⚠️ Message too long.');
 
-  // ── Pending admin actions (priority 1) ──
+  // Check for pending command (non-admin only)
   const pending = pendingCommands.get(ctx.from.id);
-  if (pending && Date.now() - pending.ts < 120000 && isAdmin(ctx.from.id)) {
-    const action = pending.command;
-
-    // Free Model
-    if (action === 'admin_set_free_model') {
-      pendingCommands.delete(ctx.from.id);
-      const success = await premium.setConfig('free_model', msg.trim());
-      if (success) {
-        return ctx.reply(`✅ Free model set to: \`${msg.trim()}\``, { parse_mode: 'Markdown' });
-      } else {
-        return ctx.reply('❌ Failed to set free model. Check logs.');
-      }
-    }
-
-    // Premium Model
-    if (action === 'admin_set_premium_model') {
-      pendingCommands.delete(ctx.from.id);
-      const models = msg.trim().split(',').map(s => s.trim()).filter(Boolean);
-      const success = await premium.setConfig('premium_models', models);
-      if (success) {
-        return ctx.reply(`✅ Premium models set to:\n\`${models.join('\`, \`')}\``, { parse_mode: 'Markdown' });
-      } else {
-        return ctx.reply('❌ Failed to set premium models. Check logs.');
-      }
-    }
-
-    // Free Limits
-    if (action === 'admin_set_free_limits') {
-      pendingCommands.delete(ctx.from.id);
-      const parts = msg.trim().split(/\s+/);
-      if (parts.length !== 3) return ctx.reply('❌ Format: `msgs searches reminds`\nExample: `20 5 3`', { parse_mode: 'Markdown' });
-      const limits = { messagesPerDay: parseInt(parts[0]), searchesPerDay: parseInt(parts[1]), remindersActive: parseInt(parts[2]) };
-      const success = await premium.setConfig('free_limits', limits);
-      if (success) {
-        return ctx.reply(`✅ Free limits set:\n💬 ${limits.messagesPerDay} msgs | 🔍 ${limits.searchesPerDay} searches | ⏰ ${limits.remindersActive} reminds`);
-      } else {
-        return ctx.reply('❌ Failed to set free limits. Check logs.');
-      }
-    }
-
-    // Premium Limits
-    if (action === 'admin_set_premium_limits') {
-      pendingCommands.delete(ctx.from.id);
-      const parts = msg.trim().split(/\s+/);
-      if (parts.length !== 3) return ctx.reply('❌ Format: `msgs searches reminds`\nExample: `-1 -1 -1` (unlimited)', { parse_mode: 'Markdown' });
-      const limits = { messagesPerDay: parseInt(parts[0]), searchesPerDay: parseInt(parts[1]), remindersActive: parseInt(parts[2]) };
-      const success = await premium.setConfig('premium_limits', limits);
-      if (success) {
-        return ctx.reply(`✅ Premium limits set:\n💬 ${limits.messagesPerDay} msgs | 🔍 ${limits.searchesPerDay} searches | ⏰ ${limits.remindersActive} reminds`);
-      } else {
-        return ctx.reply('❌ Failed to set premium limits. Check logs.');
-      }
-    }
-
-    // Premium Price
-    if (action === 'admin_set_price') {
-      pendingCommands.delete(ctx.from.id);
-      const price = parseInt(msg.trim());
-      if (isNaN(price) || price < 1) return ctx.reply('❌ Send a number (minimum 1).');
-      const success = await premium.setConfig('premium_price', price);
-      if (success) {
-        return ctx.reply(`✅ Premium price set to: ${price} ⭐`);
-      } else {
-        return ctx.reply('❌ Failed to set premium price. Check logs.');
-      }
-    }
-
-    // Grant Premium
-    if (action === 'admin_grant') {
-      pendingCommands.delete(ctx.from.id);
-      const parts = msg.trim().split(/\s+/);
-      const chatId = parts[0];
-      const days = parseInt(parts[1]) || 30;
-      if (!chatId) return ctx.reply('❌ Send: `<chat_id> <days>`', { parse_mode: 'Markdown' });
-      const expires = new Date(Date.now() + days * 86400000).toISOString();
-      try {
-        await supaUpsert('bot_premium', { chat_id: String(chatId), is_premium: true, activated_at: new Date().toISOString(), expires_at: expires, updated_at: new Date().toISOString() });
-        return ctx.reply(`✅ Premium granted to \`${chatId}\` for ${days} days.`, { parse_mode: 'Markdown' });
-      } catch (e) { return ctx.reply('❌ Error: ' + e.message.substring(0, 200)); }
-    }
-
-    // Revoke Premium
-    if (action === 'admin_revoke') {
-      pendingCommands.delete(ctx.from.id);
-      const chatId = msg.trim().split(/\s+/)[0];
-      if (!chatId) return ctx.reply('❌ Send the chat ID.');
-      try {
-        await supaUpsert('bot_premium', { chat_id: String(chatId), is_premium: false, updated_at: new Date().toISOString() });
-        return ctx.reply(`🔒 Premium revoked from \`${chatId}\`.`, { parse_mode: 'Markdown' });
-      } catch (e) { return ctx.reply('❌ Error: ' + e.message.substring(0, 200)); }
-    }
-  }
-
-  // ── Pending command prompts (priority 2) ──
   if (pending && Date.now() - pending.ts < 60000 && !pending.command.startsWith('admin_')) {
     pendingCommands.delete(ctx.from.id);
     const fakeCtx = { ...ctx, message: { ...ctx.message, text: `/${pending.command} ${msg}` } };
